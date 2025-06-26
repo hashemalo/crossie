@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
 import Crossie from './Crossie';
-import './index.css';
+import '../index.css';
 
 const App = () => {
   const ref = useRef<HTMLDivElement>(null);
@@ -12,6 +12,7 @@ const App = () => {
 
     const observer = new ResizeObserver(() => {
       const rect = el.getBoundingClientRect();
+      console.log("WIDTH AND HEIGHT" + rect.width, rect.height);
       window.parent.postMessage(
         {
           type: 'CROSSIE_RESIZE',

@@ -4,10 +4,26 @@
     <meta charset="UTF-8" />
     <title>Crossie Overlay</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script type="module" src="./frame.js"></script>
-    <link rel="stylesheet" href="./frame-C2JrUErG.css" />
+
+    <link rel="stylesheet" href="./index.css" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body { 
+        margin: 0; 
+        padding: 0; 
+        background: transparent; 
+        width: 100%; 
+        overflow-x: hidden; 
+      }
+      #root { 
+        width: 100%; 
+        max-width: 100%; 
+        overflow-x: hidden; 
+      }
+    </style>
   </head>
-  <body style="margin:0; padding:0; background:transparent;">
+  <body>
     <div id="root"></div>
+    <script type="module" src="./frame.js"></script>
   </body>
 </html>
