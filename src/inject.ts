@@ -1,4 +1,6 @@
-// inject.ts - Handles auth and passes user data to iframe
+// inject.ts - Simplified with AuthService
+import { authService } from './shared/authService.ts';
+
 const iframe = document.createElement('iframe');
 iframe.src = chrome.runtime.getURL('frame.html');
 
@@ -6,8 +8,8 @@ Object.assign(iframe.style, {
   position: 'fixed',
   bottom: '20px',
   right: '20px',
-  width: '300px',
-  height: '400px',
+  width: '400px',
+  height: '500px',
   border: 'none',
   borderRadius: '12px',
   boxShadow: '0 10px 30px rgba(0, 0, 0, 0.3)',
@@ -46,7 +48,6 @@ minimizedButton.innerHTML = `
   </svg>
 `;
 
-// Add hover effect to minimized button
 minimizedButton.addEventListener('mouseenter', () => {
   minimizedButton.style.transform = 'scale(1.1)';
 });
@@ -55,7 +56,6 @@ minimizedButton.addEventListener('mouseleave', () => {
   minimizedButton.style.transform = 'scale(1)';
 });
 
-// Click to restore
 minimizedButton.addEventListener('click', () => {
   showExtension();
 });
@@ -63,73 +63,31 @@ minimizedButton.addEventListener('click', () => {
 document.body.appendChild(iframe);
 document.body.appendChild(minimizedButton);
 
-// Auth state management
-let currentUser: any = null;
-let currentProfile: any = null;
-
-// Check auth state and create mock profile
-async function checkAuthState() {
-  try {
-    const result = await chrome.storage.local.get(['crossie_auth']);
-    const authData = result.crossie_auth;
-    
-    if (authData && authData.expires_at > Date.now() / 1000) {
-      currentUser = authData.user;
-      currentProfile = {
-        username: `user_${authData.user.id.slice(-6)}`,
-        full_name: authData.user.email?.split('@')[0] || 'User',
-        avatar_url: `https://ui-avatars.com/api/?name=${authData.user.email?.split('@')[0] || 'User'}&background=3b82f6&color=fff`
-      };
-    } else {
-      currentUser = null;
-      currentProfile = null;
-    }
-    
-    // Send auth state to iframe
-    sendAuthStateToIframe();
-  } catch (error) {
-    console.error('Auth check error:', error);
-    currentUser = null;
-    currentProfile = null;
-    sendAuthStateToIframe();
-  }
-}
+// Subscribe to auth service for state changes
+authService.subscribe((authState) => {
+  // Send auth state to iframe whenever it changes
+  sendAuthStateToIframe(authState);
+});
 
 // Send auth state to iframe
-function sendAuthStateToIframe() {
+function sendAuthStateToIframe(authState?: any) {
   if (iframe.contentWindow) {
+    const state = authState || authService.getState();
     iframe.contentWindow.postMessage({
       type: 'AUTH_STATE_UPDATE',
-      authenticated: !!currentUser,
-      user: currentUser,
-      profile: currentProfile
+      authenticated: state.authenticated,
+      user: state.user,
+      profile: state.profile,
+      loading: state.loading
     }, '*');
   }
 }
 
-// Open auth popup
-function openAuthPopup() {
-  const authUrl = chrome.runtime.getURL('auth.html');
-  const authWindow = window.open(
-    authUrl, 
-    'crossie-auth',
-    'width=400,height=600,scrollbars=yes,resizable=yes'
-  );
-  
-  // Check for auth completion periodically
-  const checkAuth = setInterval(() => {
-    try {
-      if (authWindow?.closed) {
-        clearInterval(checkAuth);
-        // Recheck auth state after popup closes
-        setTimeout(() => checkAuthState(), 500);
-      }
-    } catch (error) {
-      // Window might be cross-origin, ignore errors
-    }
-  }, 1000);
-}
 
+// Handle sign out
+async function handleSignOut() {
+  await authService.signOut();
+}
 
 function minimizeExtension() {
   iframe.style.transform = 'scale(0)';
@@ -139,7 +97,6 @@ function minimizeExtension() {
     iframe.style.display = 'none';
     minimizedButton.style.display = 'flex';
     
-    // Animate in the minimized button
     setTimeout(() => {
       minimizedButton.style.transform = 'scale(1)';
       minimizedButton.style.opacity = '1';
@@ -155,13 +112,12 @@ function showExtension() {
     minimizedButton.style.display = 'none';
     iframe.style.display = 'block';
     
-    // Animate in the iframe
     setTimeout(() => {
       iframe.style.transform = 'scale(1)';
       iframe.style.opacity = '1';
     }, 50);
     
-    // Send auth state when showing
+    // Send current auth state when showing
     sendAuthStateToIframe();
   }, 200);
 }
@@ -171,8 +127,15 @@ window.addEventListener('message', (event) => {
   const { type, width, height } = event.data || {};
 
   if (type === 'CROSSIE_RESIZE') {
+    // Smooth resize animation
+    iframe.style.transition = 'width 0.3s ease, height 0.3s ease';
     iframe.style.width = `${width}px`;
     iframe.style.height = `${height}px`;
+    
+    // Remove transition after animation completes
+    setTimeout(() => {
+      iframe.style.transition = 'all 0.3s ease-in-out';
+    }, 300);
   }
   
   if (type === 'CROSSIE_MINIMIZE') {
@@ -187,31 +150,22 @@ window.addEventListener('message', (event) => {
     sendAuthStateToIframe();
   }
   
-  if (type === 'OPEN_AUTH_POPUP') {
-    openAuthPopup();
-  }
+
   
-    
+  if (type === 'SIGN_OUT') {
+    handleSignOut();
+  }
 });
 
-// Listen for auth state changes from popup
+// Listen for auth state changes from background/popup
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'AUTH_STATE_CHANGED') {
-    checkAuthState();
-  }
-});
-
-// Storage change listener for auth updates
-chrome.storage.onChanged.addListener((changes, namespace) => {
-  if (namespace === 'local' && changes.crossie_auth) {
-    checkAuthState();
+    // Auth service will automatically handle this through storage listener
   }
 });
 
 // Initialize auth state when iframe loads
 iframe.onload = () => {
-  checkAuthState();
+  // Send current auth state
+  sendAuthStateToIframe();
 };
-
-// Initial auth check
-checkAuthState();

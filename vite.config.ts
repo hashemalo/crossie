@@ -8,6 +8,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: '.', 
+    target: 'es2020',
     rollupOptions: {
       input: {
         inject: resolve(__dirname, 'src/inject.ts'),
@@ -15,10 +16,12 @@ export default defineConfig({
         popup: resolve(__dirname, 'src/auth/index.tsx'),
       },
       output: {
-        entryFileNames: '[name].js',        // JS files
-        chunkFileNames: '[name].js',        // Chunk files  
-        assetFileNames: '[name].[ext]',     // CSS and other assets
-      }
+        format: 'es', // Change to 'es' or 'cjs'
+        entryFileNames: '[name].js',        
+        chunkFileNames: '[name].js',        
+        assetFileNames: '[name].[ext]',
+      },
+      external: ['chrome'],
     }
   }
 })

@@ -2,33 +2,29 @@
   "manifest_version": 3,
   "name": "Crossie",
   "version": "1.0",
-  "permissions": [
-    "scripting", 
-    "activeTab", 
-    "storage",
-    "identity"
-  ],
-  "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
       "js": ["inject.js"],
-      "run_at": "document_idle",
-      "all_frames": false
+      "type": "module",
+      "run_at": "document_end"
+      
     }
   ],
   "web_accessible_resources": [
     {
       "resources": [
         "frame.html", 
-        "frame.js", 
-        "assets/*",
-        "*.css",
-        "*.js"
+        "auth.html",
+        "shared/authService.js",
+        "chunks/.js",
+        ".js", 
+        "*.css"
       ],
       "matches": ["<all_urls>"]
     }
   ],
+  "permissions": ["storage", "activeTab"],
   "action": {
     "default_popup": "auth.html",
     "default_title": "Crossie"

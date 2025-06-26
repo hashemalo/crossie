@@ -1,363 +1,210 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { authService, type AuthState, type SupabaseConfig } from "../shared/authService";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-
+// Create Supabase client for auth operations
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-interface User {
-  id: string;
-  email?: string;
-}
+type AuthView = "signin" | "signup" | "profile" | "success";
 
-interface AuthState {
-  user: User | null;
-  loading: boolean;
-  view: "signin" | "signup" | "profile" | "complete";
-}
-
-export default function Auth() {
-  const [authState, setAuthState] = useState<AuthState>({
-    user: null,
-    loading: true,
-    view: "signin",
-  });
-
-  // Form states
+export default function AuthView() {
+  const [view, setView] = useState<AuthView>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [passwordConfirm, setPasswordConfirm] = useState("");
   const [username, setUsername] = useState("");
-  const [displayName, setDisplayName] = useState("");
-
-  // Error states
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [authState, setAuthState] = useState<AuthState>({
+    user: null,
+    profile: null,
+    authenticated: false,
+    loading: true
+  });
+  
+  // Ref for container to measure size
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    checkAuthState();
-  }, []);
-
-  const checkAuthState = async () => {
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (session) {
-        setAuthState((prev) => ({ ...prev, user: session.user }));
-        await checkUserProfile(session.user);
-      } else {
-        setAuthState((prev) => ({ ...prev, loading: false, view: "signin" }));
+  // Function to resize the popup window
+  const resizeWindow = () => {
+    if (containerRef.current) {
+      const rect = containerRef.current.getBoundingClientRect();
+      const newWidth = Math.max(420, rect.width + 40);
+      const newHeight = Math.max(300, rect.height + 60);
+      
+      try {
+        window.resizeTo(newWidth, newHeight);
+        const screenWidth = window.screen.width;
+        const screenHeight = window.screen.height;
+        const left = (screenWidth - newWidth) / 2;
+        const top = (screenHeight - newHeight) / 2;
+        window.moveTo(left, top);
+      } catch (error) {
+        console.warn('Could not resize window:', error);
       }
-    } catch (error) {
-      console.error("Auth check error:", error);
-      setAuthState((prev) => ({ ...prev, loading: false, view: "signin" }));
     }
   };
 
-  const checkUserProfile = async (user: any) => {
-    try {
-      const { data: profile, error } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .single();
-
-      if (error && error.code !== "PGRST116") {
-        throw error;
+  // Subscribe to auth service
+  useEffect(() => {
+    const unsubscribe = authService.subscribe((newState) => {
+      setAuthState(newState);
+      
+      // If user is authenticated and has profile, close popup
+      if (newState.authenticated && newState.profile && !loading) {
+        setTimeout(() => window.close(), 1000);
       }
+    });
 
-      if (profile && profile.username) {
-        // User has completed setup
-        await saveAuthToStorage();
-        setAuthState((prev) => ({ ...prev, loading: false, view: "complete" }));
-        setTimeout(() => window.close(), 1500);
-      } else {
-        // User needs to complete profile
-        setAuthState((prev) => ({ ...prev, loading: false, view: "profile" }));
-        // Set suggested values
-        const suggestedUsername = user.email
-          .split("@")[0]
-          .replace(/[^a-zA-Z0-9]/g, "");
-        setUsername(suggestedUsername);
-        setDisplayName(suggestedUsername);
-      }
-    } catch (error) {
-      console.error("Profile check error:", error);
-      setError("Failed to load profile. Please try again.");
-      setAuthState((prev) => ({ ...prev, loading: false, view: "signin" }));
-    }
+    return unsubscribe;
+  }, [loading]);
+
+  // Resize window when view changes
+  useEffect(() => {
+    const timer = setTimeout(resizeWindow, 100);
+    return () => clearTimeout(timer);
+  }, [view, error, loading]);
+
+  // Resize on window resize
+  useEffect(() => {
+    const handleResize = () => setTimeout(resizeWindow, 100);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const saveAuthToStorage = async (session: any) => {
+    const authData = {
+      access_token: session.access_token,
+      refresh_token: session.refresh_token,
+      user: session.user,
+      expires_at: session.expires_at,
+    };
+
+    const config: SupabaseConfig = {
+      url: SUPABASE_URL,
+      anonKey: SUPABASE_ANON_KEY
+    };
+
+    await authService.saveAuthData(authData, config);
   };
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!email || !password) {
-      setError("Please fill in all fields.");
-      return;
-    }
-
-    setIsSubmitting(true);
+    setLoading(true);
     setError("");
 
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password: password,
+        email,
+        password,
       });
 
       if (error) throw error;
 
-      setAuthState((prev) => ({ ...prev, user: data.user }));
-      await checkUserProfile(data.user);
+      if (data.session && data.user) {
+        await saveAuthToStorage(data.session);
+        
+        // Check if profile exists
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", data.user.id)
+          .single();
+
+        if (profileError || !profile) {
+          setView("profile");
+        } else {
+          // Profile exists, auth service will handle the rest
+          await authService.checkAuthState();
+        }
+      }
     } catch (error: any) {
-      setError(error.message || "Failed to sign in. Please try again.");
+      setError(error.message);
     } finally {
-      setIsSubmitting(false);
+      setLoading(false);
     }
   };
 
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!email || !password || !passwordConfirm) {
-      setError("Please fill in all fields.");
-      return;
-    }
-
-    if (password !== passwordConfirm) {
-      setError("Passwords do not match.");
-      return;
-    }
-
-    if (password.length < 6) {
-      setError("Password must be at least 6 characters.");
-      return;
-    }
-
-    setIsSubmitting(true);
+    setLoading(true);
     setError("");
 
     try {
       const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password: password,
+        email,
+        password,
       });
 
       if (error) throw error;
 
-      if (data.user) {
-        setAuthState((prev) => ({ ...prev, user: data.user, view: "profile" }));
-        // Set suggested values
-        const suggestedUsername = email
-          .split("@")[0]
-          .replace(/[^a-zA-Z0-9]/g, "");
-        setUsername(suggestedUsername);
-        setDisplayName(suggestedUsername);
+      if (data.session && data.user) {
+        await saveAuthToStorage(data.session);
+        setView("profile");
       }
     } catch (error: any) {
-      setError(error.message || "Failed to create account. Please try again.");
+      setError(error.message);
     } finally {
-      setIsSubmitting(false);
+      setLoading(false);
     }
   };
 
-  const handleSaveProfile = async () => {
-    if (!username.trim()) {
-      setError("Please enter a username.");
-      return;
-    }
-
-    if (username.length < 3) {
-      setError("Username must be at least 3 characters.");
-      return;
-    }
-
-    if (!/^[a-zA-Z0-9_]+$/.test(username)) {
-      setError("Username can only contain letters, numbers, and underscores.");
-      return;
-    }
-
-    setIsSubmitting(true);
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
     setError("");
 
     try {
-      // Check username availability
-      const { data: existingUser } = await supabase
-        .from("profiles")
-        .select("username")
-        .eq("username", username.trim())
-        .single();
+      if (!authState.user) throw new Error("No user found");
 
-      if (existingUser) {
-        setError("Username already taken. Please choose another.");
-        return;
-      }
-
-      // Create/update profile
       const { error } = await supabase.from("profiles").upsert({
-        id: authState.user!.id,
+        id: authState.user.id,
         username: username.trim(),
-        full_name: displayName.trim() || username.trim(),
-        email: authState.user!.email,
+        email: authState.user.email,
         updated_at: new Date().toISOString(),
       });
 
       if (error) throw error;
 
-      await saveAuthToStorage();
-      setSuccess("Profile created successfully!");
-      setAuthState((prev) => ({ ...prev, view: "complete" }));
+      // Save profile to auth service
+      const profileData = {
+        username: username.trim(),
+        email: authState.user.email,
+      };
 
-      setTimeout(() => window.close(), 1500);
+      await authService.saveProfile(profileData);
+      setView("success");
     } catch (error: any) {
-      setError(error.message || "Failed to save profile. Please try again.");
+      setError(error.message);
     } finally {
-      setIsSubmitting(false);
+      setLoading(false);
     }
   };
 
-  const saveAuthToStorage = async () => {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (session) {
-      await chrome.storage.local.set({
-        crossie_auth: {
-          access_token: session.access_token,
-          refresh_token: session.refresh_token,
-          user: session.user,
-          expires_at: session.expires_at,
-        },
-      });
-
-      // Notify content scripts about auth state change
-      chrome.tabs.query({}, (tabs) => {
-        tabs.forEach((tab) => {
-          if (tab.id) {
-            chrome.tabs
-              .sendMessage(tab.id, {
-                type: "AUTH_STATE_CHANGED",
-                authenticated: true,
-                user: session.user,
-              })
-              .catch(() => {});
-          }
-        });
-      });
-    }
-  };
-
-  const clearError = () => setError("");
-
-  if (authState.loading) {
+  // If already authenticated and has profile, show success
+  if (authState.authenticated && authState.profile && !loading) {
     return (
-      <div className="w-80 min-h-96 p-6 bg-gradient-to-br from-slate-900 to-blue-900 text-white">
-        <div className="text-center">
-          <div className="text-2xl font-bold mb-2">Crossie</div>
-          <div className="text-sm opacity-80 mb-8">
-            Connect and comment on any website
-          </div>
-          <div className="flex justify-center">
-            <div className="animate-spin w-8 h-8 border-2 border-white border-t-transparent rounded-full"></div>
-          </div>
-          <p className="mt-4 text-sm opacity-80">Loading...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (authState.view === "complete") {
-    return (
-      <div className="w-80 min-h-96 p-6 bg-gradient-to-br from-slate-900 to-blue-900 text-white">
-        <div className="text-center">
-          <div className="text-2xl font-bold mb-2">Crossie</div>
-          <div className="text-sm opacity-80 mb-8">
-            Connect and comment on any website
-          </div>
-          <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6">
-            <div className="w-16 h-16 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg
-                width="32"
-                height="32"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              >
-                <polyline points="20,6 9,17 4,12" />
+      <div ref={containerRef} className="w-full max-w-md mx-auto bg-slate-900 text-white">
+        <div className="p-6">
+          <div className="text-center space-y-6">
+            <div className="w-20 h-20 bg-green-500 rounded-full mx-auto flex items-center justify-center">
+              <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             </div>
-            <h3 className="text-lg font-semibold mb-2">Welcome to Crossie!</h3>
-            <p className="text-sm opacity-80">
-              {success || "Setup complete! You can now start commenting."}
-            </p>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (authState.view === "profile") {
-    return (
-      <div className="w-80 min-h-96 p-6 bg-gradient-to-br from-slate-900 to-blue-900 text-white">
-        <div className="text-center mb-6">
-          <div className="text-2xl font-bold mb-2">Crossie</div>
-          <div className="text-sm opacity-80">Complete your profile</div>
-        </div>
-
-        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6">
-          <div className="mb-4">
-            <div className="text-sm opacity-80 text-center">Welcome!</div>
-            <div className="text-center font-medium">
-              {authState.user?.email}
-            </div>
-          </div>
-
-          <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium mb-2">Username</label>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-3 py-2 bg-white text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"
-                placeholder="Choose a username..."
-                maxLength={20}
-              />
+              <h2 className="text-xl font-semibold mb-2">Welcome back!</h2>
+              <p className="text-slate-400 mb-6">
+                You're already signed in as {authState.profile.username}.
+              </p>
             </div>
-
-            <div>
-              <label className="block text-sm font-medium mb-2">
-                Display Name
-              </label>
-              <input
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="w-full px-3 py-2 bg-white text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"
-                placeholder="Your display name..."
-                maxLength={30}
-              />
-            </div>
-
-            {error && (
-              <div className="bg-red-500/20 border border-red-400/30 text-red-100 px-3 py-2 rounded-lg text-sm">
-                {error}
-              </div>
-            )}
-
             <button
-              onClick={handleSaveProfile}
-              disabled={isSubmitting}
-              className="w-full bg-white text-blue-600 py-2 px-4 rounded-lg font-medium hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              onClick={() => window.close()}
+              className="w-full bg-blue-600 hover:bg-blue-500 py-2 px-4 rounded-lg font-medium transition-colors"
             >
-              {isSubmitting ? "Saving..." : "Complete Setup"}
+              Continue
             </button>
           </div>
         </div>
@@ -366,159 +213,174 @@ export default function Auth() {
   }
 
   return (
-    <div className="w-80 min-h-96 p-6 bg-gradient-to-br from-slate-900 to-blue-900 text-white">
-      <div className="text-center mb-6">
-        <div className="text-2xl font-bold mb-2">Crossie</div>
-        <div className="text-sm opacity-80">
-          Connect and comment on any website
+    <div ref={containerRef} className="w-full max-w-md mx-auto bg-slate-900 text-white">
+      <div className="p-6">
+        {/* Header */}
+        <div className="text-center mb-8">
+          <h1 className="text-2xl font-bold text-blue-400 mb-2">Crossie</h1>
+          <p className="text-slate-400 text-sm">
+            {view === "signin" && "Sign in to your account"}
+            {view === "signup" && "Create your account"}
+            {view === "profile" && "Complete your profile"}
+            {view === "success" && "Welcome to Crossie!"}
+          </p>
         </div>
-      </div>
 
-      <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6">
-        {authState.view === "signin" ? (
-          <>
+        {/* Error Message */}
+        {error && (
+          <div className="bg-red-500/20 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6">
+            {error}
+          </div>
+        )}
+
+        {/* Sign In View */}
+        {view === "signin" && (
+          <div className="space-y-6">
             <form onSubmit={handleSignIn} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium mb-2">Email</label>
                 <input
                   type="email"
                   value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    clearError();
-                  }}
-                  className="w-full px-3 py-2 bg-white text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"
-                  placeholder="Enter your email"
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   required
                 />
               </div>
-
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  Password
-                </label>
+                <label className="block text-sm font-medium mb-2">Password</label>
                 <input
                   type="password"
                   value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    clearError();
-                  }}
-                  className="w-full px-3 py-2 bg-white text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"
-                  placeholder="Enter your password"
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   required
                 />
               </div>
-
-              {error && (
-                <div className="bg-red-500/20 border border-red-400/30 text-red-100 px-3 py-2 rounded-lg text-sm">
-                  {error}
-                </div>
-              )}
-
               <button
                 type="submit"
-                disabled={isSubmitting}
-                className="w-full bg-white text-blue-600 py-2 px-4 rounded-lg font-medium hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                disabled={loading}
+                className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 py-2 px-4 rounded-lg font-medium transition-colors"
               >
-                {isSubmitting ? "Signing in..." : "Sign In"}
+                {loading ? "Signing in..." : "Sign In"}
               </button>
             </form>
-
-            <div className="mt-4 text-center text-sm">
-              Don't have an account?{" "}
+            
+            <div className="text-center">
               <button
-                onClick={() => {
-                  setAuthState((prev) => ({ ...prev, view: "signup" }));
-                  clearError();
-                }}
-                className="text-blue-200 hover:text-white underline"
+                onClick={() => setView("signup")}
+                className="text-blue-400 hover:text-blue-300 text-sm"
               >
-                Sign up
+                Don't have an account? Sign up
               </button>
             </div>
-          </>
-        ) : (
-          <>
+          </div>
+        )}
+
+        {/* Sign Up View */}
+        {view === "signup" && (
+          <div className="space-y-6">
             <form onSubmit={handleSignUp} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium mb-2">Email</label>
                 <input
                   type="email"
                   value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    clearError();
-                  }}
-                  className="w-full px-3 py-2 bg-white text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"
-                  placeholder="Enter your email"
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   required
                 />
               </div>
-
               <div>
-                <label className="block text-sm font-medium mb-2">
-                  Password
-                </label>
+                <label className="block text-sm font-medium mb-2">Password</label>
                 <input
                   type="password"
                   value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    clearError();
-                  }}
-                  className="w-full px-3 py-2 bg-white text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"
-                  placeholder="Create a password"
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   required
                   minLength={6}
                 />
               </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2">
-                  Confirm Password
-                </label>
-                <input
-                  type="password"
-                  value={passwordConfirm}
-                  onChange={(e) => {
-                    setPasswordConfirm(e.target.value);
-                    clearError();
-                  }}
-                  className="w-full px-3 py-2 bg-white text-gray-900 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-300"
-                  placeholder="Confirm your password"
-                  required
-                />
-              </div>
-
-              {error && (
-                <div className="bg-red-500/20 border border-red-400/30 text-red-100 px-3 py-2 rounded-lg text-sm">
-                  {error}
-                </div>
-              )}
-
               <button
                 type="submit"
-                disabled={isSubmitting}
-                className="w-full bg-white text-blue-600 py-2 px-4 rounded-lg font-medium hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                disabled={loading}
+                className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 py-2 px-4 rounded-lg font-medium transition-colors"
               >
-                {isSubmitting ? "Creating account..." : "Create Account"}
+                {loading ? "Creating account..." : "Sign Up"}
               </button>
             </form>
-
-            <div className="mt-4 text-center text-sm">
-              Already have an account?{" "}
+            
+            <div className="text-center">
               <button
-                onClick={() => {
-                  setAuthState((prev) => ({ ...prev, view: "signin" }));
-                  clearError();
-                }}
-                className="text-blue-200 hover:text-white underline"
+                onClick={() => setView("signin")}
+                className="text-blue-400 hover:text-blue-300 text-sm"
               >
-                Sign in
+                Already have an account? Sign in
               </button>
             </div>
-          </>
+          </div>
+        )}
+
+        {/* Profile Setup View */}
+        {view === "profile" && (
+          <div className="space-y-6">
+            <div className="text-center">
+              <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full mx-auto mb-4 flex items-center justify-center">
+                <span className="text-2xl font-bold">
+                  {username ? username[0]?.toUpperCase() : "?"}
+                </span>
+              </div>
+            </div>
+            
+            <form onSubmit={handleSaveProfile} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">
+                  Username <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Choose a unique username"
+                  required
+                  pattern="^[a-zA-Z0-9_]+$"
+                  title="Username can only contain letters, numbers, and underscores"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !username.trim()}
+                className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 py-2 px-4 rounded-lg font-medium transition-colors"
+              >
+                {loading ? "Saving..." : "Complete Setup"}
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* Success View */}
+        {view === "success" && (
+          <div className="text-center space-y-6">
+            <div className="w-20 h-20 bg-green-500 rounded-full mx-auto flex items-center justify-center">
+              <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <div>
+              <h2 className="text-xl font-semibold mb-2">All set!</h2>
+              <p className="text-slate-400 mb-6">
+                Your profile has been created successfully. You can now start commenting on websites.
+              </p>
+            </div>
+            <button
+              onClick={() => window.close()}
+              className="w-full bg-blue-600 hover:bg-blue-500 py-2 px-4 rounded-lg font-medium transition-colors"
+            >
+              Get Started
+            </button>
+          </div>
         )}
       </div>
     </div>

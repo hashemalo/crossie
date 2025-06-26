@@ -1,15 +1,5 @@
 import { useState, useEffect } from "react";
-
-interface User {
-  id: string;
-  email?: string;
-}
-
-interface Profile {
-  username: string;
-  full_name: string;
-  avatar_url: string;
-}
+import { authService, type AuthState, type Profile } from "../shared/authService";
 
 interface Message {
   id: string;
@@ -21,38 +11,32 @@ interface Message {
 export default function Crossie() {
   const [txt, setTxt] = useState("");
   const [msgs, setMsgs] = useState<Message[]>([]);
-  const [authenticated, setAuthenticated] = useState(false);
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [currentProfile, setCurrentProfile] = useState<Profile | null>(null);
+  const [authState, setAuthState] = useState<AuthState>({
+    user: null,
+    profile: null,
+    authenticated: false,
+    loading: true
+  });
 
   useEffect(() => {
-    // Listen for auth state updates from inject.ts
-    const messageListener = (event: MessageEvent) => {
-      if (event.data?.type === 'AUTH_STATE_UPDATE') {
-        setAuthenticated(event.data.authenticated);
-        setCurrentUser(event.data.user);
-        setCurrentProfile(event.data.profile);
-      }
-    };
-    
-    window.addEventListener('message', messageListener);
-    
-    // Request initial auth state
-    window.parent.postMessage({ type: 'REQUEST_AUTH_STATE' }, '*');
-    
-    return () => {
-      window.removeEventListener('message', messageListener);
-    };
+    // Subscribe to auth state changes
+    const unsubscribe = authService.subscribe((newState) => {
+      setAuthState(newState);
+      console.log('Crossie auth state updated:', newState);
+    });
+
+    // Cleanup subscription on unmount
+    return unsubscribe;
   }, []);
 
   const send = () => {
-    if (!txt.trim() || !authenticated || !currentProfile || !currentUser) return;
+    if (!txt.trim() || !authState.profile) return;
     
     const newMessage: Message = {
       id: Date.now().toString(),
       text: txt.trim(),
       timestamp: new Date(),
-      user: currentProfile
+      user: authState.profile
     };
     
     setMsgs([...msgs, newMessage]);
@@ -74,11 +58,47 @@ export default function Crossie() {
     window.parent.postMessage({ type: "OPEN_AUTH_POPUP" }, "*");
   };
 
-  const signOut = () => {
-    window.parent.postMessage({ type: "SIGN_OUT" }, "*");
+  const handleSignOut = () => {
+    authService.signOut();
   };
 
-  if (!authenticated) {
+  // Show loading state
+  if (authState.loading) {
+    return (
+      <div className="relative select-none">
+        <header className="bg-slate-800 rounded-t-xl px-4 py-2 text-white font-semibold flex items-center justify-between">
+          <span>Crossie</span>
+          <button
+            onClick={minimize}
+            className="hover:bg-slate-700 rounded transition-colors"
+            title="Minimize"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+            >
+              <path d="M5 12h14" />
+            </svg>
+          </button>
+        </header>
+
+        <section className="bg-slate-900 text-white p-6 rounded-b-xl border-t border-slate-700 text-center">
+          <div className="mb-4">
+            <div className="animate-spin w-8 h-8 border-2 border-white border-t-transparent rounded-full mx-auto mb-3"></div>
+            <h3 className="text-lg font-semibold mb-2">Loading...</h3>
+            <p className="text-slate-400 text-sm">Checking authentication status</p>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
+  // Show sign-in prompt if no profile exists
+  if (!authState.profile) {
     return (
       <div className="relative select-none">
         <header className="bg-slate-800 rounded-t-xl px-4 py-2 text-white font-semibold flex items-center justify-between">
@@ -109,38 +129,34 @@ export default function Crossie() {
             </svg>
             <h3 className="text-lg font-semibold mb-2">Welcome to Crossie</h3>
             <p className="text-slate-400 text-sm mb-4">Sign in to start commenting and connecting with others on any website.</p>
+            <button
+              onClick={openAuth}
+              className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+            >
+              Sign In
+            </button>
           </div>
-          
-          <button
-            onClick={openAuth}
-            className="w-full bg-blue-600 hover:bg-blue-500 py-3 px-4 rounded-lg text-white font-medium transition-colors flex items-center justify-center gap-2"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
-              <polyline points="10,17 15,12 10,7"/>
-              <line x1="15" y1="12" x2="3" y2="12"/>
-            </svg>
-            Sign In / Sign Up
-          </button>
         </section>
       </div>
     );
   }
 
+  // Show main interface if profile exists
   return (
     <div className="relative select-none">
       <header className="bg-slate-800 rounded-t-xl px-4 py-2 text-white font-semibold flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span>Crossie</span>
-          {currentProfile && (
-            <div className="flex items-center gap-2">
-              <img 
-                src={currentProfile.avatar_url} 
-                alt="Profile" 
-                className="w-6 h-6 rounded-full"
-              />
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            <img 
+              src={authState.profile.avatar_url} 
+              alt="Profile" 
+              className="w-6 h-6 rounded-full"
+            />
+            <span className="text-xs text-slate-300">
+              {authState.profile.username}
+            </span>
+          </div>
         </div>
         <div className="flex items-center space-x-3">
           <div className="flex items-center space-x-2">
@@ -151,6 +167,14 @@ export default function Crossie() {
               </span>
             )}
           </div>
+          
+          <button
+            onClick={handleSignOut}
+            className="hover:bg-slate-700 rounded transition-colors text-xs px-2 py-1"
+            title="Sign Out"
+          >
+            Sign Out
+          </button>
           
           <button
             onClick={minimize}

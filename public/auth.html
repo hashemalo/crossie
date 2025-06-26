@@ -1,12 +1,32 @@
 <!DOCTYPE html>
 <html>
-<head>
-    <meta charset="UTF-8">
+  <head>
+    <meta charset="UTF-8" />
     <title>Crossie Auth</title>
-    <link rel="stylesheet" href="./index.css">
-</head>
-<body>
+    <link rel="stylesheet" href="./index.css" />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #0f172a; /* Match your slate-900 background */
+        width: 100%;
+        min-height: 100vh; /* Ensure full height */
+        overflow-x: hidden;
+      }
+      #popup-root {
+        width: 100%;
+        min-height: 100vh;
+        display: flex;
+        align-items: stretch; /* Allow content to determine height */
+      }
+    </style>
+  </head>
+  <body>
     <div id="popup-root"></div>
     <script type="module" src="./popup.js"></script>
-</body>
+  </body>
 </html>

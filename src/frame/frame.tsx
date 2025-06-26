@@ -12,7 +12,6 @@ const App = () => {
 
     const observer = new ResizeObserver(() => {
       const rect = el.getBoundingClientRect();
-      console.log("WIDTH AND HEIGHT" + rect.width, rect.height);
       window.parent.postMessage(
         {
           type: 'CROSSIE_RESIZE',
