@@ -1,6 +1,5 @@
 // src/shared/authService.ts
-import { createClient } from "@supabase/supabase-js";
-
+import { supabase } from "../lib/supabaseClient";
 export interface User {
   id: string;
   email?: string;
@@ -50,7 +49,7 @@ class AuthService {
     try {
       const config = await this.getSupabaseConfig();
       if (config) {
-        this.supabase = createClient(config.url, config.anonKey);
+        this.supabase = supabase
       }
       
       await this.checkAuthState();
