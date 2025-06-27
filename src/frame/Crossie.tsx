@@ -8,6 +8,16 @@ interface Message {
   user: Profile;
 }
 
+// Message protocol for parent window communication
+interface ParentMessage {
+  type: 'CROSSIE_RESIZE' | 'CROSSIE_MINIMIZE' | 'CROSSIE_SHOW' | 'OPEN_AUTH_POPUP';
+  payload?: any;
+}
+
+function sendToParent(message: ParentMessage) {
+  window.parent.postMessage(message, '*');
+}
+
 export default function Crossie() {
   const [txt, setTxt] = useState("");
   const [msgs, setMsgs] = useState<Message[]>([]);
@@ -51,16 +61,9 @@ export default function Crossie() {
   };
 
   const minimize = () => {
-    window.parent.postMessage({ type: "CROSSIE_MINIMIZE" }, "*");
+    sendToParent({ type: 'CROSSIE_MINIMIZE' });
   };
 
-  const openAuth = () => {
-    window.parent.postMessage({ type: "OPEN_AUTH_POPUP" }, "*");
-  };
-
-  const handleSignOut = () => {
-    authService.signOut();
-  };
 
   // Show loading state
   if (authState.loading) {
@@ -70,12 +73,12 @@ export default function Crossie() {
           <span>Crossie</span>
           <button
             onClick={minimize}
-            className="hover:bg-slate-700 rounded transition-colors"
+            className="hover:bg-slate-700 rounded p-1 transition-colors"
             title="Minimize"
           >
             <svg
-              width="13"
-              height="13"
+              width="20"
+              height="20"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -105,12 +108,12 @@ export default function Crossie() {
           <span>Crossie</span>
           <button
             onClick={minimize}
-            className="hover:bg-slate-700 rounded transition-colors"
+            className="hover:bg-slate-700 rounded p-1 transition-colors"
             title="Minimize"
           >
             <svg
-              width="13"
-              height="13"
+              width="20"
+              height="20"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -128,13 +131,7 @@ export default function Crossie() {
               <circle cx="12" cy="7" r="4"/>
             </svg>
             <h3 className="text-lg font-semibold mb-2">Welcome to Crossie</h3>
-            <p className="text-slate-400 text-sm mb-4">Sign in to start commenting and connecting with others on any website.</p>
-            <button
-              onClick={openAuth}
-              className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-medium transition-colors"
-            >
-              Sign In
-            </button>
+            <p className="text-slate-400 text-sm mb-4">Open the extension and sign in to start commenting and connecting with others on any website.</p>
           </div>
         </section>
       </div>
@@ -160,30 +157,22 @@ export default function Crossie() {
         </div>
         <div className="flex items-center space-x-3">
           <div className="flex items-center space-x-2">
-            <div className="w-3 h-3 bg-green-400 rounded-full" title="Online"></div>
+            <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse" title="Online"></div>
             {msgs.length > 0 && (
               <span className="text-xs bg-blue-600 px-2 py-1 rounded-full">
                 {msgs.length}
               </span>
             )}
           </div>
-          
-          <button
-            onClick={handleSignOut}
-            className="hover:bg-slate-700 rounded transition-colors text-xs px-2 py-1"
-            title="Sign Out"
-          >
-            Sign Out
-          </button>
-          
+
           <button
             onClick={minimize}
-            className="hover:bg-slate-700 rounded transition-colors"
+            className="hover:bg-slate-700 rounded p-1 transition-colors"
             title="Minimize"
           >
             <svg
-              width="13"
-              height="13"
+              width="20"
+              height="20"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -199,7 +188,7 @@ export default function Crossie() {
         {/* Messages area */}
         <div className="max-h-40 overflow-y-auto space-y-2">
           {msgs.length === 0 ? (
-            <p className="text-slate-400 text-sm italic">No messages yet...</p>
+            <p className="text-slate-400 text-sm italic">No messages yet. Start a conversation!</p>
           ) : (
             msgs.map((msg) => (
               <div key={msg.id} className="bg-slate-800 p-3 rounded-lg">
@@ -215,10 +204,10 @@ export default function Crossie() {
                         {msg.user.username}
                       </span>
                       <span className="text-xs text-slate-400">
-                        {msg.timestamp.toLocaleTimeString()}
+                        {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </span>
                     </div>
-                    <p className="text-sm">{msg.text}</p>
+                    <p className="text-sm break-words">{msg.text}</p>
                   </div>
                 </div>
               </div>
@@ -246,13 +235,6 @@ export default function Crossie() {
               Send
             </button>
             
-            <button
-              onClick={() => setMsgs([])}
-              className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg transition-colors"
-              title="Clear messages"
-            >
-              Clear
-            </button>
           </div>
         </div>
       </section>

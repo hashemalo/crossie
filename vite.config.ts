@@ -7,21 +7,19 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   build: {
     outDir: 'dist',
-    assetsDir: '.', 
-    target: 'es2020',
+    emptyOutDir: true,
     rollupOptions: {
       input: {
         inject: resolve(__dirname, 'src/inject.ts'),
         frame: resolve(__dirname, 'src/Frame/frame.tsx'),
         popup: resolve(__dirname, 'src/auth/index.tsx'),
+        background: resolve(__dirname, 'src/background.js'),
       },
       output: {
-        format: 'es', // Change to 'es' or 'cjs'
-        entryFileNames: '[name].js',        
-        chunkFileNames: '[name].js',        
+        entryFileNames: '[name].js',
+        chunkFileNames: 'chunks/[name].[hash].js',
         assetFileNames: '[name].[ext]',
       },
-      external: ['chrome'],
-    }
-  }
+    },
+  },
 })
