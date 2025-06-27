@@ -1,43 +1,45 @@
 // inject.ts - Pure content script without modules
 (() => {
   // Create iframe element
-  const iframe = document.createElement('iframe');
-  iframe.src = chrome.runtime.getURL('frame.html');
+  const iframe = document.createElement("iframe");
+  
+  const hostUrl = encodeURIComponent(window.location.href);
+  iframe.src = chrome.runtime.getURL(`frame.html?host=${hostUrl}`);
 
   // Apply iframe styles
   Object.assign(iframe.style, {
-    position: 'fixed',
-    bottom: '20px',
-    right: '20px',
-    width: '300px',
-    height: '400px',
-    border: 'none',
-    borderRadius: '12px',
-    boxShadow: '0 10px 30px rgba(0, 0, 0, 0.3)',
-    zIndex: '999999',
-    backgroundColor: 'transparent',
-    transition: 'all 0.3s ease-in-out',
-    display: 'none',
+    position: "fixed",
+    bottom: "20px",
+    right: "20px",
+    width: "300px",
+    height: "400px",
+    border: "none",
+    borderRadius: "12px",
+    boxShadow: "0 10px 30px rgba(0, 0, 0, 0.3)",
+    zIndex: "999999",
+    backgroundColor: "transparent",
+    transition: "all 0.3s ease-in-out",
+    display: "none",
   });
 
   // Create minimized button
-  const minimizedButton = document.createElement('div');
+  const minimizedButton = document.createElement("div");
   Object.assign(minimizedButton.style, {
-    position: 'fixed',
-    bottom: '20px',
-    right: '20px',
-    width: '60px',
-    height: '60px',
-    backgroundColor: 'rgba(30, 41, 59, 0.6)',
-    borderRadius: '50%',
-    border: 'none',
-    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
-    zIndex: '999999',
-    cursor: 'pointer',
-    alignItems: 'center',
-    justifyContent: 'center',
-    transition: 'all 0.3s ease-in-out',
-    display: 'flex',
+    position: "fixed",
+    bottom: "20px",
+    right: "20px",
+    width: "60px",
+    height: "60px",
+    backgroundColor: "rgba(30, 41, 59, 0.6)",
+    borderRadius: "50%",
+    border: "none",
+    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+    zIndex: "999999",
+    cursor: "pointer",
+    alignItems: "center",
+    justifyContent: "center",
+    transition: "all 0.3s ease-in-out",
+    display: "flex",
   });
 
   // Add icon to minimized button
@@ -51,17 +53,17 @@
   `;
 
   // Button hover effects
-  minimizedButton.addEventListener('mouseenter', () => {
-    minimizedButton.style.transform = 'scale(1.1)';
-    minimizedButton.style.backgroundColor = 'rgba(30, 41, 59, 1)';
+  minimizedButton.addEventListener("mouseenter", () => {
+    minimizedButton.style.transform = "scale(1.1)";
+    minimizedButton.style.backgroundColor = "rgba(30, 41, 59, 1)";
   });
 
-  minimizedButton.addEventListener('mouseleave', () => {
-    minimizedButton.style.transform = 'scale(1)';
-    minimizedButton.style.backgroundColor = 'rgba(30, 41, 59, 0.5)';
+  minimizedButton.addEventListener("mouseleave", () => {
+    minimizedButton.style.transform = "scale(1)";
+    minimizedButton.style.backgroundColor = "rgba(30, 41, 59, 0.5)";
   });
 
-  minimizedButton.addEventListener('click', () => {
+  minimizedButton.addEventListener("click", () => {
     showExtension();
   });
 
@@ -71,60 +73,60 @@
 
   // Extension visibility functions
   function minimizeExtension() {
-    iframe.style.transform = 'scale(0)';
-    iframe.style.opacity = '0';
-    
+    iframe.style.transform = "scale(0)";
+    iframe.style.opacity = "0";
+
     setTimeout(() => {
-      iframe.style.display = 'none';
-      minimizedButton.style.display = 'flex';
-      
+      iframe.style.display = "none";
+      minimizedButton.style.display = "flex";
+
       setTimeout(() => {
-        minimizedButton.style.transform = 'scale(1)';
-        minimizedButton.style.opacity = '1';
+        minimizedButton.style.transform = "scale(1)";
+        minimizedButton.style.opacity = "1";
       }, 50);
     }, 300);
   }
 
   function showExtension() {
-    minimizedButton.style.transform = 'scale(0)';
-    minimizedButton.style.opacity = '0';
-    
+    minimizedButton.style.transform = "scale(0)";
+    minimizedButton.style.opacity = "0";
+
     setTimeout(() => {
-      minimizedButton.style.display = 'none';
-      iframe.style.display = 'block';
-      
+      minimizedButton.style.display = "none";
+      iframe.style.display = "block";
+
       setTimeout(() => {
-        iframe.style.transform = 'scale(1)';
-        iframe.style.opacity = '1';
+        iframe.style.transform = "scale(1)";
+        iframe.style.opacity = "1";
       }, 50);
     }, 200);
   }
 
   // Message handler for iframe communication
-  window.addEventListener('message', (event) => {
+  window.addEventListener("message", (event) => {
     // Only accept messages from our extension
     if (event.source !== iframe.contentWindow) return;
 
     const { type, payload } = event.data || {};
 
     switch (type) {
-      case 'CROSSIE_RESIZE':
+      case "CROSSIE_RESIZE":
         if (payload?.width && payload?.height) {
-          iframe.style.transition = 'width 0.3s ease, height 0.3s ease';
+          iframe.style.transition = "width 0.3s ease, height 0.3s ease";
           iframe.style.width = `${payload.width}px`;
           iframe.style.height = `${payload.height}px`;
-          
+
           setTimeout(() => {
-            iframe.style.transition = 'all 0.3s ease-in-out';
+            iframe.style.transition = "all 0.3s ease-in-out";
           }, 300);
         }
         break;
 
-      case 'CROSSIE_MINIMIZE':
+      case "CROSSIE_MINIMIZE":
         minimizeExtension();
         break;
 
-      case 'CROSSIE_SHOW':
+      case "CROSSIE_SHOW":
         showExtension();
         break;
 
@@ -137,20 +139,20 @@
   // Listen for messages from extension (popup/background)
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const { type, payload } = message || {};
-    console.log('Received message from extension:', type, sender, payload);
+    console.log("Received message from extension:", type, sender, payload);
     switch (type) {
-      case 'SHOW_EXTENSION':
+      case "SHOW_EXTENSION":
         showExtension();
         sendResponse({ success: true });
         break;
 
-      case 'HIDE_EXTENSION':
+      case "HIDE_EXTENSION":
         minimizeExtension();
         sendResponse({ success: true });
         break;
 
-      case 'TOGGLE_EXTENSION':
-        if (iframe.style.display === 'none') {
+      case "TOGGLE_EXTENSION":
+        if (iframe.style.display === "none") {
           showExtension();
         } else {
           minimizeExtension();
@@ -168,7 +170,7 @@
 
   // Initial setup - start minimized
   setTimeout(() => {
-    minimizedButton.style.transform = 'scale(1)';
-    minimizedButton.style.opacity = '1';
+    minimizedButton.style.transform = "scale(1)";
+    minimizedButton.style.opacity = "1";
   }, 500);
 })();

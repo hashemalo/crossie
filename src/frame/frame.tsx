@@ -39,7 +39,7 @@ const App = () => {
       // Only handle messages from parent window
       if (event.source !== window.parent) return;
 
-      const { type, payload } = event.data || {};
+      const { type  } = event.data || {};
 
       switch (type) {
         // Add any frame-specific message handlers here

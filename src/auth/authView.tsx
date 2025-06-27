@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef } from "react";
-import { createClient } from "@supabase/supabase-js";
 import { authService, type AuthState, type SupabaseConfig } from "../shared/authService";
+import { supabase } from "../lib/supabaseClient";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 
 // Create Supabase client for auth operations
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 type AuthView = "signin" | "signup" | "profile" | "success";
 

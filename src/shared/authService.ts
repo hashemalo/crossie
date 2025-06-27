@@ -8,7 +8,6 @@ export interface User {
 
 export interface Profile {
   username: string;
-  avatar_url?: string;
   email?: string;
 }
 
@@ -163,7 +162,7 @@ class AuthService {
       }
 
       // Fallback to public request
-      const response = await fetch(`${config.url}/rest/v1/profiles?id=eq.${userId}&select=username,full_name,avatar_url`, {
+      const response = await fetch(`${config.url}/rest/v1/profiles?id=eq.${userId}&select=username`, {
         headers: {
           'apikey': config.anonKey,
           'Content-Type': 'application/json',
@@ -188,7 +187,6 @@ class AuthService {
   private formatProfile(profileData: any): Profile {
     return {
       username: profileData.username,
-      avatar_url: profileData.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(profileData.username)}&background=3b82f6&color=fff`,
       email: profileData.email
     };
   }
@@ -225,7 +223,7 @@ class AuthService {
   // Save authentication data to storage
   async saveAuthData(authData: StoredAuthData, config?: SupabaseConfig): Promise<void> {
     const storageData: any = { crossie_auth: authData };
-    
+
     if (config) {
       storageData.supabase_config = config;
     }
