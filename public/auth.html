@@ -12,16 +12,16 @@
       body {
         margin: 0;
         padding: 0;
-        background: #0f172a; /* Match your slate-900 background */
-        width: 100%;
-        min-height: 100vh; /* Ensure full height */
-        overflow-x: hidden;
+        background: #0f172a;
+        width: fit-content;
+        height: fit-content;
+        overflow: hidden; /* prevent accidental scroll */
       }
+
       #popup-root {
+        display: inline-block;
         width: 100%;
-        min-height: 100vh;
-        display: flex;
-        align-items: stretch; /* Allow content to determine height */
+        height: fit-content;
       }
     </style>
   </head>

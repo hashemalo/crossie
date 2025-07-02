@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   authService,
   type AuthState,
@@ -37,98 +37,119 @@ export default function Crossie() {
     authenticated: false,
     loading: true,
   });
+  const params = new URLSearchParams(window.location.search); // Get URL parameters
+  const rawHost = params.get("host") || "";
+  const url = canonicalise(decodeURIComponent(rawHost));
+
   const [threadId, setThreadId] = useState<string | null>(null);
+
+
+  const messagesRef = useRef<HTMLDivElement>(null); // Ref for messages container
+
+  useEffect(() => {
+    if (messagesRef.current) {
+      messagesRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [msgs]);
+
+  function getInitial(str: string): string {
+    if (!str) return "?";
+    return str.trim()[0].toUpperCase();
+  }
+
+  function stringToColor(str: string): string {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = str.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const hue = hash % 360;
+    return `hsl(${hue}, 60%, 60%)`;
+  }
 
   // on mount:
   useEffect(() => {
-    // 1. Read host URL from query param
-    const params = new URLSearchParams(window.location.search);
-    const rawHost = params.get("host") || "";
-    const url = canonicalise(decodeURIComponent(rawHost));
-
-    // 2. Call the RPC to get_or_create_thread
+    if (!url) return;
     supabase
-      .rpc("get_or_create_thread", { p_url: url })
-      .then(({ data, error }) => {
-        if (error) throw error;
-        setThreadId(data);
+      .from("comment_threads")
+      .select("id")
+      .eq("url", url)
+      .maybeSingle() // returns { data: null } if no row
+      .then(({ data }) => {
+        if (data) setThreadId(data.id);
       });
-  }, []);
+  }, [url]);
 
   useEffect(() => {
-  if (!threadId) return;
+    if (!threadId) return;
 
-  // Fetch existing comments with joined profile info
-  supabase
-    .from("comments")
-    .select(`
-      id,
-      body,
-      created_at,
-      user:profiles (
-        id,
-        username
+    // Fetch existing comments with joined profile info
+    supabase
+      .from("comments")
+      .select(
+        `
+          id, body, created_at,
+          user:profiles ( id, username )
+        `
       )
-    `)
-    .eq("thread_id", threadId)
-    .order("created_at", { ascending: false })
-    .then(({ data, error }) => {
-      if (error) {
-        console.error("Error fetching comments:", error);
-        return;
-      }
 
-      if (data) {
-        const mapped = data.map((c: any) => ({
-          id: c.id,
-          text: c.body,
-          timestamp: new Date(c.created_at),
-          user: {
-            id: c.user.id,
-            username: c.user.username
-          },
-        }));
-        setMsgs(mapped);
-      }
-    });
+      .eq("thread_id", threadId)
+      .order("created_at", { ascending: false })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error("Error fetching comments:", error);
+          return;
+        }
 
-  //Realtime subscription (Supabase doesn't join here, so enrich manually)
-  const channel = supabase
-    .channel(`comments-thread-${threadId}`)
-    .on(
-      "postgres_changes",
-      {
-        event: "INSERT",
-        schema: "public",
-        table: "comments",
-        filter: `thread_id=eq.${threadId}`,
-      },
-      ({ new: comment }) => {
-        if (!comment) return;
-
-        // Use profile from current auth state if available
-        setMsgs((cur) => [
-          {
-            id: comment.id,
-            text: comment.body,
-            timestamp: new Date(comment.created_at),
+        if (data) {
+          const mapped = data.map((c: any) => ({
+            id: c.id,
+            text: c.body,
+            timestamp: new Date(c.created_at),
             user: {
-              id: comment.user_id,
-              username: authState.profile?.username || "Anonymous",
+              id: c.user.id,
+              username: c.user.username,
             },
-          },
-          ...cur,
-        ]);
-      }
-    )
-    .subscribe();
+          }));
+          setMsgs(mapped);
+        }
+      });
 
-  //Cleanup on unmount
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}, [threadId, authState.profile]);
+    //Realtime subscription (Supabase doesn't join here, so enrich manually)
+    const channel = supabase
+      .channel(`comments-thread-${threadId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "comments",
+          filter: `thread_id=eq.${threadId}`,
+        },
+        ({ new: comment }) => {
+          if (!comment) return;
 
+          // Use profile from current auth state if available
+          setMsgs((cur) => [
+            {
+              id: comment.id,
+              text: comment.body,
+              timestamp: new Date(comment.created_at),
+              user: {
+                id: comment.user_id,
+                username: authState.profile?.username || "Anonymous",
+              },
+            },
+            ...cur,
+          ]);
+        }
+      )
+      .subscribe();
+
+    //Cleanup on unmount
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [threadId, authState.profile]);
 
   useEffect(() => {
     // Subscribe to auth state changes
@@ -142,14 +163,29 @@ export default function Crossie() {
   }, []);
 
   const send = async () => {
-    if (!txt.trim() || !authState.profile || !authState.user || !threadId)
-      return;
+    if (!txt.trim() || !authState.profile || !authState.user) return;
 
-    await supabase.from("comments").insert({
-      thread_id: threadId,
-      user_id: authState.user.id, 
+    let tid = threadId;
+    if (!tid) {
+      // first comment on this URL → now create the thread
+      const { data, error } = await supabase.rpc("get_or_create_thread", {
+        p_url: url,
+      });
+      if (error) {
+        console.error("couldn't make thread:", error);
+        return;
+      }
+      tid = data as string;
+      setThreadId(tid);
+    }
+
+    // then insert the comment into the (newly created or existing) thread
+    const { error: insertErr } = await supabase.from("comments").insert({
+      thread_id: tid,
+      user_id: authState.user.id,
       body: txt.trim(),
     });
+    if (insertErr) console.error("insert failed:", insertErr);
 
     setTxt("");
   };
@@ -258,11 +294,19 @@ export default function Crossie() {
         <div className="flex items-center gap-2">
           <span>Crossie</span>
           <div className="flex items-center gap-2">
-            <img
-              src={""}
-              alt="Profile"
-              className="w-6 h-6 rounded-full"
-            />
+            <div
+              className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
+              style={{
+                backgroundColor: stringToColor(
+                  authState.profile.username || authState.profile.email || ""
+                ),
+              }}
+              title={authState.profile.username}
+            >
+              {getInitial(
+                authState.profile.username || authState.profile.email || ""
+              )}
+            </div>
             <span className="text-xs text-slate-300">
               {authState.profile.username}
             </span>
@@ -302,7 +346,7 @@ export default function Crossie() {
 
       <section className="bg-slate-900 text-white p-4 space-y-3 rounded-b-xl border-t border-slate-700">
         {/* Messages area */}
-        <div className="max-h-40 overflow-y-auto space-y-2">
+        <div ref={messagesRef} className="max-h-40 overflow-y-auto space-y-2">
           {msgs.length === 0 ? (
             <p className="text-slate-400 text-sm italic">
               No messages yet. Start a conversation!
@@ -311,11 +355,17 @@ export default function Crossie() {
             msgs.map((msg) => (
               <div key={msg.id} className="bg-slate-800 p-3 rounded-lg">
                 <div className="flex items-start gap-2">
-                  <img
-                    src={""}
-                    alt={msg.user.username}
-                    className="w-6 h-6 rounded-full flex-shrink-0 mt-0.5"
-                  />
+                  <div
+                    className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
+                    style={{
+                      backgroundColor: stringToColor(
+                        msg.user.username || msg.user.email || ""
+                      ),
+                    }}
+                    title={msg.user.username}
+                  >
+                    {getInitial(msg.user.username || msg.user.email || "")}
+                  </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-xs font-medium text-blue-400">
@@ -350,7 +400,7 @@ export default function Crossie() {
           <div className="flex space-x-2">
             <button
               onClick={send}
-              disabled={!txt.trim() || !threadId}
+              disabled={!txt.trim()}
               className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-400 py-2 px-4 rounded-lg text-white font-medium transition-colors"
             >
               Send

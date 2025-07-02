@@ -95,7 +95,7 @@ class AuthService {
           this.updateState({
             user: authData.user,
             profile,
-            authenticated: !!profile,
+            authenticated: true,
             loading: false
           });
         } else {
