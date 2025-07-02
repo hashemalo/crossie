@@ -12,6 +12,7 @@ interface Message {
   text: string;
   timestamp: Date;
   user: Profile;
+  isEditing?: boolean;
 }
 
 // Message protocol for parent window communication
@@ -31,26 +32,21 @@ function sendToParent(message: ParentMessage) {
 export default function Crossie() {
   const [txt, setTxt] = useState("");
   const [msgs, setMsgs] = useState<Message[]>([]);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
   const [authState, setAuthState] = useState<AuthState>({
     user: null,
     profile: null,
     authenticated: false,
     loading: true,
   });
-  const params = new URLSearchParams(window.location.search); // Get URL parameters
+  const params = new URLSearchParams(window.location.search);
   const rawHost = params.get("host") || "";
   const url = canonicalise(decodeURIComponent(rawHost));
 
   const [threadId, setThreadId] = useState<string | null>(null);
 
-
-  const messagesRef = useRef<HTMLDivElement>(null); // Ref for messages container
-
-  useEffect(() => {
-    if (messagesRef.current) {
-      messagesRef.current.scrollTo({ top: 0, behavior: 'smooth' });
-    }
-  }, [msgs]);
+  const messagesRef = useRef<HTMLDivElement>(null);
 
   function getInitial(str: string): string {
     if (!str) return "?";
@@ -73,7 +69,7 @@ export default function Crossie() {
       .from("comment_threads")
       .select("id")
       .eq("url", url)
-      .maybeSingle() // returns { data: null } if no row
+      .maybeSingle()
       .then(({ data }) => {
         if (data) setThreadId(data.id);
       });
@@ -87,11 +83,10 @@ export default function Crossie() {
       .from("comments")
       .select(
         `
-          id, body, created_at,
+          id, body, created_at, user_id,
           user:profiles ( id, username )
         `
       )
-
       .eq("thread_id", threadId)
       .order("created_at", { ascending: false })
       .then(({ data, error }) => {
@@ -114,7 +109,7 @@ export default function Crossie() {
         }
       });
 
-    //Realtime subscription (Supabase doesn't join here, so enrich manually)
+    // Realtime subscription
     const channel = supabase
       .channel(`comments-thread-${threadId}`)
       .on(
@@ -128,7 +123,6 @@ export default function Crossie() {
         ({ new: comment }) => {
           if (!comment) return;
 
-          // Use profile from current auth state if available
           setMsgs((cur) => [
             {
               id: comment.id,
@@ -143,22 +137,64 @@ export default function Crossie() {
           ]);
         }
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "comments",
+          filter: `thread_id=eq.${threadId}`,
+        },
+        ({ new: comment }) => {
+          if (!comment) return;
+
+          setMsgs((cur) =>
+            cur.map((msg) =>
+              msg.id === comment.id
+                ? { ...msg, text: comment.body }
+                : msg
+            )
+          );
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "DELETE",
+          schema: "public",
+          table: "comments",
+          filter: `thread_id=eq.${threadId}`,
+        },
+        (payload) => {
+          console.log("DELETE event received:", payload);
+          const { old: comment } = payload;
+          
+          if (!comment) {
+            console.log("No comment data in DELETE payload");
+            return;
+          }
+
+          console.log("Removing comment with ID:", comment.id);
+          setMsgs((cur) => {
+            const filtered = cur.filter((msg) => msg.id !== comment.id);
+            console.log("Messages before filter:", cur.length, "after filter:", filtered.length);
+            return filtered;
+          });
+        }
+      )
       .subscribe();
 
-    //Cleanup on unmount
     return () => {
       supabase.removeChannel(channel);
     };
   }, [threadId, authState.profile]);
 
   useEffect(() => {
-    // Subscribe to auth state changes
     const unsubscribe = authService.subscribe((newState) => {
       setAuthState(newState);
       console.log("Crossie auth state updated:", newState);
     });
 
-    // Cleanup subscription on unmount
     return unsubscribe;
   }, []);
 
@@ -167,7 +203,6 @@ export default function Crossie() {
 
     let tid = threadId;
     if (!tid) {
-      // first comment on this URL → now create the thread
       const { data, error } = await supabase.rpc("get_or_create_thread", {
         p_url: url,
       });
@@ -179,15 +214,86 @@ export default function Crossie() {
       setThreadId(tid);
     }
 
-    // then insert the comment into the (newly created or existing) thread
     const { error: insertErr } = await supabase.from("comments").insert({
       thread_id: tid,
       user_id: authState.user.id,
       body: txt.trim(),
     });
     if (insertErr) console.error("insert failed:", insertErr);
-
+    
+    if (messagesRef.current) {
+      messagesRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
     setTxt("");
+  };
+
+  const startEdit = (msgId: string, currentText: string) => {
+    setEditingId(msgId);
+    setEditText(currentText);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditText("");
+  };
+
+  const saveEdit = async (msgId: string) => {
+    if (!editText.trim()) return;
+
+    const { error } = await supabase
+      .from("comments")
+      .update({ body: editText.trim() })
+      .eq("id", msgId);
+
+    if (error) {
+      console.error("Edit failed:", error);
+      return;
+    }
+
+    setEditingId(null);
+    setEditText("");
+  };
+
+  const deleteComment = async (msgId: string) => {
+    if (!confirm("Are you sure you want to delete this comment?")) return;
+
+    // Optimistic update - remove from UI immediately
+    setMsgs((cur) => cur.filter((msg) => msg.id !== msgId));
+
+    const { error } = await supabase
+      .from("comments")
+      .delete()
+      .eq("id", msgId);
+
+    if (error) {
+      console.error("Delete failed:", error);
+      // Revert optimistic update on error - refetch messages
+      if (threadId) {
+        const { data } = await supabase
+          .from("comments")
+          .select(
+            `
+              id, body, created_at, user_id,
+              user:profiles ( id, username )
+            `
+          )
+          .eq("thread_id", threadId)
+          .order("created_at", { ascending: false });
+        
+        if (data) {
+          const mapped = data.map((c: any) => ({
+            id: c.id,
+            text: c.body,
+            timestamp: new Date(c.created_at),
+            user: {
+              id: c.user.id,
+              username: c.user.username,
+            },
+          }));
+          setMsgs(mapped);
+        }
+      }
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -197,8 +303,22 @@ export default function Crossie() {
     }
   };
 
+  const handleEditKeyPress = (e: React.KeyboardEvent, msgId: string) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      saveEdit(msgId);
+    }
+    if (e.key === "Escape") {
+      cancelEdit();
+    }
+  };
+
   const minimize = () => {
     sendToParent({ type: "CROSSIE_MINIMIZE" });
+  };
+
+  const isOwnComment = (msg: Message) => {
+    return authState.user && msg.user.id === authState.user.id;
   };
 
   // Show loading state
@@ -377,8 +497,59 @@ export default function Crossie() {
                           minute: "2-digit",
                         })}
                       </span>
+                      {isOwnComment(msg) && (
+                        <div className="flex gap-1 ml-auto">
+                          <button
+                            onClick={() => startEdit(msg.id, msg.text)}
+                            className="text-slate-400 hover:text-slate-300 transition-colors"
+                            title="Edit"
+                          >
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                              <path d="m18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => deleteComment(msg.id)}
+                            className="text-slate-400 hover:text-slate-300 transition-colors"
+                            title="Delete"
+                          >
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polyline points="3,6 5,6 21,6" />
+                              <path d="m19,6v14a2,2 0 0,1-2,2H7a2,2 0 0,1-2-2V6m3,0V4a2,2 0 0,1,2-2h4a2,2 0 0,1,2,2v2" />
+                            </svg>
+                          </button>
+                        </div>
+                      )}
                     </div>
-                    <p className="text-sm break-words">{msg.text}</p>
+                    {editingId === msg.id ? (
+                      <div className="space-y-2">
+                        <textarea
+                          value={editText}
+                          onChange={(e) => setEditText(e.target.value)}
+                          onKeyDown={(e) => handleEditKeyPress(e, msg.id)}
+                          className="w-full bg-slate-700 text-white p-2 rounded text-sm resize-none focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          rows={2}
+                          autoFocus
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => saveEdit(msg.id)}
+                            className="text-xs bg-blue-600 hover:bg-blue-500 px-2 py-1 rounded transition-colors"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={cancelEdit}
+                            className="text-xs bg-slate-600 hover:bg-slate-500 px-2 py-1 rounded transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm break-all">{msg.text}</p>
+                    )}
                   </div>
                 </div>
               </div>

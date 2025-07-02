@@ -197,6 +197,7 @@ export default function AuthView() {
 
       // Save profile to auth service
       const profileData = {
+        id: authState.user.id,
         username: username.trim(),
         email: authState.user.email,
       };

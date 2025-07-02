@@ -1,11 +1,13 @@
 // src/shared/authService.ts
 import { supabase } from "../lib/supabaseClient";
+
 export interface User {
   id: string;
   email?: string;
 }
 
 export interface Profile {
+  id: string;        // Added missing id field
   username: string;
   email?: string;
 }
@@ -95,7 +97,7 @@ class AuthService {
           this.updateState({
             user: authData.user,
             profile,
-            authenticated: true,
+            authenticated: !!authData.user.id, // ✅ Fixed: user is authenticated regardless of profile
             loading: false
           });
         } else {
@@ -106,7 +108,7 @@ class AuthService {
             this.updateState({
               user: refreshed.user,
               profile,
-              authenticated: !!profile,
+              authenticated: !!refreshed.user.id, // ✅ Fixed: user is authenticated regardless of profile
               loading: false
             });
           } else {
@@ -144,7 +146,7 @@ class AuthService {
 
       // Try authenticated request first
       if (accessToken) {
-        const response = await fetch(`${config.url}/rest/v1/profiles?id=eq.${userId}&select=*`, {
+        const response = await fetch(`${config.url}/rest/v1/profiles?id=eq.${userId}&select=id,username,email`, {
           headers: {
             'apikey': config.anonKey,
             'Authorization': `Bearer ${accessToken}`,
@@ -161,7 +163,7 @@ class AuthService {
       }
 
       // Fallback to public request
-      const response = await fetch(`${config.url}/rest/v1/profiles?id=eq.${userId}&select=username`, {
+      const response = await fetch(`${config.url}/rest/v1/profiles?id=eq.${userId}&select=id,username,email`, {
         headers: {
           'apikey': config.anonKey,
           'Content-Type': 'application/json',
@@ -185,6 +187,7 @@ class AuthService {
   // Format profile data consistently
   private formatProfile(profileData: any): Profile {
     return {
+      id: profileData.id,           // ✅ Added id field
       username: profileData.username,
       email: profileData.email
     };
@@ -240,7 +243,7 @@ class AuthService {
       this.updateState({
         ...this.currentState,
         profile: profileData,
-        authenticated: true,
+        authenticated: !!currentAuth.crossie_auth.user.id,
         loading: false
       });
     }
@@ -299,21 +302,20 @@ class AuthService {
 
   // Listen for storage changes from other components
   private initializeStorageListener(): void {
-  if (
-    typeof chrome !== 'undefined' &&
-    chrome.storage &&
-    chrome.storage.onChanged
-  ) {
-    chrome.storage.onChanged.addListener((changes, namespace) => {
-      if (namespace === 'local' && changes.crossie_auth) {
-        setTimeout(() => this.checkAuthState(), 100);
-      }
-    });
-  } else {
-    console.warn('⚠️ chrome.storage.onChanged is not available — skipping listener setup');
+    if (
+      typeof chrome !== 'undefined' &&
+      chrome.storage &&
+      chrome.storage.onChanged
+    ) {
+      chrome.storage.onChanged.addListener((changes, namespace) => {
+        if (namespace === 'local' && changes.crossie_auth) {
+          setTimeout(() => this.checkAuthState(), 100);
+        }
+      });
+    } else {
+      console.warn('⚠️ chrome.storage.onChanged is not available — skipping listener setup');
+    }
   }
-}
-
 
   // Broadcast auth changes to other parts of extension
   private broadcastAuthChange(): void {
