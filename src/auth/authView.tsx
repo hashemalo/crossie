@@ -2,21 +2,15 @@ import { useState, useEffect, useRef } from "react";
 import {
   authService,
   type AuthState,
-  type SupabaseConfig,
 } from "../shared/authService";
-import { supabase } from "../lib/supabaseClient";
 import Dashboard from "../Dashboard/dashboard";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const WEBSITE_URL = import.meta.env.VITE_WEBSITE_URL || "http://localhost:3000";
 
-type AuthView = "loading" | "signin" | "signup" | "profile" | "success" | "hub";
+type AuthView = "loading" | "signin" | "waiting" | "success" | "hub";
 
 export default function AuthView() {
   const [view, setView] = useState<AuthView>("loading");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [authState, setAuthState] = useState<AuthState>({
@@ -51,41 +45,79 @@ export default function AuthView() {
 
   // Subscribe to auth service
   useEffect(() => {
+
     const unsubscribe = authService.subscribe((newState) => {
-      console.log("Auth service subscription fired:", {
-        loading,
-        newState: {
-          loading: newState.loading,
-          authenticated: newState.authenticated,
-          profile: newState.profile,
-          user: newState.user?.id
-        }
-      });
-      
+
       setAuthState(newState);
 
-      // Only update view if we're not in a loading state for form submission
       if (!loading) {
         if (newState.loading) {
-          console.log("Setting view to loading");
           setView("loading");
         } else if (newState.authenticated && newState.profile) {
-          console.log("Setting view to hub");
           setView("hub");
         } else if (newState.authenticated && !newState.profile) {
-          console.log("Setting view to profile - user authenticated but no profile");
-          setView("profile");
+          setError(
+            "Profile setup required. Please complete sign-in on the website."
+          );
+          setView("signin");
         } else {
-          console.log("Setting view to signin - user not authenticated");
           setView("signin");
         }
-      } else {
-        console.log("Skipping view update because loading is true");
       }
     });
 
+
     return unsubscribe;
-  }, [loading]); // Keep the loading dependency to prevent view changes during form submission
+  }, [loading]);
+
+
+  // Check for auth completion while waiting
+  useEffect(() => {
+    if (view !== "waiting") return;
+
+
+    // Force a manual auth check every 2 seconds while waiting
+    const intervalId = setInterval(() => {
+      authService.checkAuthState();
+    }, 2000);
+
+    // Add a timeout to go back to signin if nothing happens after 5 minutes
+    const timeoutId = setTimeout(() => {
+      if (view === "waiting") {
+        setError("Authentication timed out. Please try again.");
+        setView("signin");
+        setLoading(false);
+      }
+    }, 300000); // 5 minutes
+
+    return () => {
+      clearInterval(intervalId);
+      clearTimeout(timeoutId);
+    };
+  }, [view]);
+
+  const handleSignInClick = () => {
+    setLoading(true);
+    setError("");
+    setView("waiting");
+
+    // Open website in new tab
+    const authUrl = `${WEBSITE_URL}/auth`;
+    const newWindow = window.open(authUrl, "_blank");
+
+    if (!newWindow) {
+      console.error("Failed to open new window");
+      setError("Please allow popups for this extension");
+      setView("signin");
+      setLoading(false);
+    }
+  };
+
+  const handleBackToSignIn = () => {
+    setView("signin");
+    setLoading(false);
+    setError("");
+  };
 
   // Resize window when view changes
   useEffect(() => {
@@ -99,117 +131,6 @@ export default function AuthView() {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
-
-  const saveAuthToStorage = async (session: any) => {
-    const authData = {
-      access_token: session.access_token,
-      refresh_token: session.refresh_token,
-      user: session.user,
-      expires_at: session.expires_at,
-    };
-
-    const config: SupabaseConfig = {
-      url: SUPABASE_URL,
-      anonKey: SUPABASE_ANON_KEY,
-    };
-
-    await authService.saveAuthData(authData, config);
-  };
-
-  const handleSignIn = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
-      if (error) throw error;
-
-      if (data.session && data.user) {
-        await saveAuthToStorage(data.session);
-
-        // Check if profile exists
-        const { data: profile, error: profileError } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", data.user.id)
-          .maybeSingle();
-
-        if (profileError || !profile) {
-          setView("profile");
-        } else {
-          // Profile exists, auth service will handle the rest
-          await authService.checkAuthState();
-        }
-      }
-    } catch (error: any) {
-      setError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSignUp = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-
-    try {
-      const { data, error } = await supabase.auth.signUp({
-        email,
-        password,
-      });
-
-      if (error) throw error;
-
-      if (data.session && data.user) {
-        await saveAuthToStorage(data.session);
-        // Don't set view here - let the auth service subscription handle it
-        // The subscription will now correctly detect authenticated user with no profile
-      }
-    } catch (error: any) {
-      setError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSaveProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-
-    try {
-      if (!authState.user) throw new Error("No user found");
-
-      const { error } = await supabase.from("profiles").upsert({
-        id: authState.user.id,
-        username: username.trim(),
-        email: authState.user.email,
-        updated_at: new Date().toISOString(),
-      });
-
-      if (error) throw error;
-
-      // Save profile to auth service
-      const profileData = {
-        id: authState.user.id,
-        username: username.trim(),
-        email: authState.user.email,
-      };
-
-      await authService.saveProfile(profileData);
-      setView("success");
-    } catch (error: any) {
-      setError(error.message);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const renderView = () => {
     switch (view) {
@@ -234,7 +155,7 @@ export default function AuthView() {
                   Crossie
                 </h1>
                 <p className="text-slate-400 text-sm">
-                  Sign in to your account
+                  Sign in to comment everywhere
                 </p>
               </div>
 
@@ -246,173 +167,76 @@ export default function AuthView() {
               )}
 
               <div className="space-y-6">
-                <form onSubmit={handleSignIn} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">
-                      Email
-                    </label>
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-2">
-                      Password
-                    </label>
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      required
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 py-2 px-4 rounded-lg font-medium transition-colors"
-                  >
-                    {loading ? "Signing in..." : "Sign In"}
-                  </button>
-                </form>
+                <button
+                  onClick={handleSignInClick}
+                  disabled={loading}
+                  className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-blue-700 py-3 px-4 rounded-lg font-medium transition-colors flex items-center justify-center gap-3"
+                >
+                  {loading ? (
+                    <div className="animate-spin w-5 h-5 border-2 border-white border-t-transparent rounded-full"></div>
+                  ) : (
+                    <>
+                      <svg
+                        className="w-5 h-5"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                        />
+                      </svg>
+                      <span>Sign in with Google</span>
+                    </>
+                  )}
+                </button>
 
                 <div className="text-center">
-                  <button
-                    onClick={() => setView("signup")}
-                    className="text-blue-400 hover:text-blue-300 text-sm"
-                  >
-                    Don't have an account? Sign up
-                  </button>
+                  <p className="text-slate-400 text-xs">
+                    By signing in, you agree to our privacy policy and terms of service.
+                  </p>
                 </div>
               </div>
             </div>
           </div>
         );
 
-      case "signup":
+      case "waiting":
         return (
           <div className="w-full max-w-md mx-auto bg-slate-900 text-white">
             <div className="p-6">
-              {/* Header */}
-              <div className="text-center mb-8">
-                <h1 className="text-2xl font-bold text-blue-400 mb-2">
-                  Crossie
-                </h1>
-                <p className="text-slate-400 text-sm">Create your account</p>
-              </div>
-
-              {/* Error Message */}
-              {error && (
-                <div className="bg-red-500/20 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6">
-                  {error}
-                </div>
-              )}
-
-              <div className="space-y-6">
-                <form onSubmit={handleSignUp} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">
-                      Email
-                    </label>
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium mb-2">
-                      Password
-                    </label>
-                    <input
-                      type="password"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      required
-                      minLength={6}
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={loading}
-                    className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 py-2 px-4 rounded-lg font-medium transition-colors"
+              <div className="text-center">
+                <div className="animate-pulse w-16 h-16 bg-blue-500 rounded-full mx-auto mb-4 flex items-center justify-center">
+                  <svg
+                    className="w-8 h-8 text-white"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
                   >
-                    {loading ? "Creating account..." : "Sign Up"}
-                  </button>
-                </form>
-
-                <div className="text-center">
-                  <button
-                    onClick={() => setView("signin")}
-                    className="text-blue-400 hover:text-blue-300 text-sm"
-                  >
-                    Already have an account? Sign in
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-
-      case "profile":
-        return (
-          <div className="w-full max-w-md mx-auto bg-slate-900 text-white">
-            <div className="p-6">
-              {/* Header */}
-              <div className="text-center mb-8">
-                <h1 className="text-2xl font-bold text-blue-400 mb-2">
-                  Crossie
-                </h1>
-                <p className="text-slate-400 text-sm">Complete your profile</p>
-              </div>
-
-              {/* Error Message */}
-              {error && (
-                <div className="bg-red-500/20 border border-red-500 text-red-300 px-4 py-3 rounded-lg mb-6">
-                  {error}
-                </div>
-              )}
-
-              <div className="space-y-6">
-                <div className="text-center">
-                  <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full mx-auto mb-4 flex items-center justify-center">
-                    <span className="text-2xl font-bold">
-                      {username ? username[0]?.toUpperCase() : "?"}
-                    </span>
-                  </div>
-                </div>
-
-                <form onSubmit={handleSaveProfile} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium mb-2">
-                      Username <span className="text-red-400">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      placeholder="Choose a unique username"
-                      required
-                      pattern="^[a-zA-Z0-9_]+$"
-                      title="Username can only contain letters, numbers, and underscores"
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M13 10V3L4 14h7v7l9-11h-7z"
                     />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={loading || !username.trim()}
-                    className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 py-2 px-4 rounded-lg font-medium transition-colors"
-                  >
-                    {loading ? "Saving..." : "Complete Setup"}
-                  </button>
-                </form>
+                  </svg>
+                </div>
+                <h2 className="text-xl font-semibold mb-2">
+                  Waiting for authentication...
+                </h2>
+                <p className="text-slate-400 mb-6">
+                  Complete the sign-in process in the tab that just opened. This
+                  window will update automatically.
+                </p>
+                <button
+                  onClick={handleBackToSignIn}
+                  className="text-blue-400 hover:text-blue-300 text-sm underline"
+                >
+                  Back to sign in
+                </button>
               </div>
             </div>
           </div>
@@ -422,14 +246,6 @@ export default function AuthView() {
         return (
           <div className="w-full max-w-md mx-auto bg-slate-900 text-white">
             <div className="p-6">
-              {/* Header */}
-              <div className="text-center mb-8">
-                <h1 className="text-2xl font-bold text-blue-400 mb-2">
-                  Crossie
-                </h1>
-                <p className="text-slate-400 text-sm">Welcome to Crossie!</p>
-              </div>
-
               <div className="text-center space-y-6">
                 <div className="w-20 h-20 bg-green-500 rounded-full mx-auto flex items-center justify-center">
                   <svg
@@ -447,73 +263,19 @@ export default function AuthView() {
                   </svg>
                 </div>
                 <div>
-                  <h2 className="text-xl font-semibold mb-2">All set!</h2>
-                  <p className="text-slate-400 mb-6">
-                    Your profile has been created successfully. You can now
-                    start commenting on websites.
+                  <h2 className="text-xl font-semibold mb-2">
+                    Authentication successful!
+                  </h2>
+                  <p className="text-slate-400">
+                    Redirecting to your dashboard...
                   </p>
                 </div>
-                <button
-                  onClick={() => window.close()}
-                  className="w-full bg-blue-600 hover:bg-blue-500 py-2 px-4 rounded-lg font-medium transition-colors"
-                >
-                  Get Started
-                </button>
-                <button
-                  onClick={() => setView("hub")}
-                  className="px-4 py-2 rounded bg-transparent hover:bg-slate-800 transition"
-                >
-                  <span className="text-blue-400 hover:text-blue-300 text-sm">
-                    Go to Dashboard
-                  </span>
-                </button>
               </div>
             </div>
           </div>
         );
 
       default:
-        // Fallback - check if user is already authenticated
-        if (authState.authenticated && authState.profile && !loading) {
-          return (
-            <div className="w-full max-w-md mx-auto bg-slate-900 text-white">
-              <div className="p-6">
-                <div className="text-center space-y-6">
-                  <div className="w-20 h-20 bg-green-500 rounded-full mx-auto flex items-center justify-center">
-                    <svg
-                      className="w-10 h-10 text-white"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                  </div>
-                  <div>
-                    <h2 className="text-xl font-semibold mb-2">
-                      Welcome back!
-                    </h2>
-                    <p className="text-slate-400 mb-6">
-                      You're already signed in as {authState.profile.username}.
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => setView("hub")}
-                    className="w-full bg-blue-600 hover:bg-blue-500 py-2 px-4 rounded-lg font-medium transition-colors"
-                  >
-                    Continue
-                  </button>
-                </div>
-              </div>
-            </div>
-          );
-        }
-        // If not authenticated, default to signin
         return null;
     }
   };
