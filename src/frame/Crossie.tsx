@@ -150,9 +150,7 @@ export default function Crossie() {
 
           setMsgs((cur) =>
             cur.map((msg) =>
-              msg.id === comment.id
-                ? { ...msg, text: comment.body }
-                : msg
+              msg.id === comment.id ? { ...msg, text: comment.body } : msg
             )
           );
         }
@@ -168,7 +166,7 @@ export default function Crossie() {
         (payload) => {
           console.log("DELETE event received:", payload);
           const { old: comment } = payload;
-          
+
           if (!comment) {
             console.log("No comment data in DELETE payload");
             return;
@@ -177,7 +175,12 @@ export default function Crossie() {
           console.log("Removing comment with ID:", comment.id);
           setMsgs((cur) => {
             const filtered = cur.filter((msg) => msg.id !== comment.id);
-            console.log("Messages before filter:", cur.length, "after filter:", filtered.length);
+            console.log(
+              "Messages before filter:",
+              cur.length,
+              "after filter:",
+              filtered.length
+            );
             return filtered;
           });
         }
@@ -220,9 +223,9 @@ export default function Crossie() {
       body: txt.trim(),
     });
     if (insertErr) console.error("insert failed:", insertErr);
-    
+
     if (messagesRef.current) {
-      messagesRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      messagesRef.current.scrollTo({ top: 0, behavior: "smooth" });
     }
     setTxt("");
   };
@@ -239,11 +242,10 @@ export default function Crossie() {
 
   const saveEdit = async (msgId: string) => {
     if (!editText.trim()) return;
-
     const { error } = await supabase
       .from("comments")
       .update({ body: editText.trim() })
-      .eq("id", msgId);
+      .eq("id", msgId)
 
     if (error) {
       console.error("Edit failed:", error);
@@ -253,9 +255,9 @@ export default function Crossie() {
     setEditingId(null);
     setEditText("");
   };
-
   const deleteComment = async (msgId: string) => {
     if (!confirm("Are you sure you want to delete this comment?")) return;
+
 
     // Optimistic update - remove from UI immediately
     setMsgs((cur) => cur.filter((msg) => msg.id !== msgId));
@@ -263,7 +265,8 @@ export default function Crossie() {
     const { error } = await supabase
       .from("comments")
       .delete()
-      .eq("id", msgId);
+      .eq("id", msgId)
+
 
     if (error) {
       console.error("Delete failed:", error);
@@ -273,13 +276,13 @@ export default function Crossie() {
           .from("comments")
           .select(
             `
-              id, body, created_at, user_id,
-              user:profiles ( id, username )
-            `
+          id, body, created_at, user_id,
+          user:profiles ( id, username )
+        `
           )
           .eq("thread_id", threadId)
           .order("created_at", { ascending: false });
-        
+
         if (data) {
           const mapped = data.map((c: any) => ({
             id: c.id,
@@ -319,6 +322,22 @@ export default function Crossie() {
 
   const isOwnComment = (msg: Message) => {
     return authState.user && msg.user.id === authState.user.id;
+  };
+
+  const getRelativeTime = (timestamp: Date) => {
+    const now = Date.now();
+    const diff = now - timestamp.getTime();
+    const seconds = Math.floor(diff / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (seconds < 60) return "just now";
+    if (minutes < 60) return `${minutes}m`;
+    if (hours < 24) return `${hours}h`;
+    if (days < 30) return `${days}d`;
+
+    return timestamp.toLocaleDateString();
   };
 
   // Show loading state
@@ -412,7 +431,6 @@ export default function Crossie() {
     <div className="relative select-none">
       <header className="bg-slate-800 rounded-t-xl px-4 py-2 text-white font-semibold flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span>Crossie</span>
           <div className="flex items-center gap-2">
             <div
               className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
@@ -463,7 +481,6 @@ export default function Crossie() {
           </button>
         </div>
       </header>
-
       <section className="bg-slate-900 text-white p-4 space-y-3 rounded-b-xl border-t border-slate-700">
         {/* Messages area */}
         <div ref={messagesRef} className="max-h-40 overflow-y-auto space-y-2">
@@ -492,33 +509,24 @@ export default function Crossie() {
                         {msg.user.username}
                       </span>
                       <span className="text-xs text-slate-400">
-                        {msg.timestamp.toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
+                        {getRelativeTime(msg.timestamp)}
                       </span>
                       {isOwnComment(msg) && (
-                        <div className="flex gap-1 ml-auto">
-                          <button
+                        <div className="flex gap-2 ml-auto">
+                          <span
                             onClick={() => startEdit(msg.id, msg.text)}
-                            className="text-slate-400 hover:text-slate-300 transition-colors"
+                            className="text-xs text-slate-400 hover:text-slate-300 hover:underline transition-colors cursor-pointer"
                             title="Edit"
                           >
-                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                              <path d="m18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-                            </svg>
-                          </button>
-                          <button
+                            ✎
+                          </span>
+                          <span
                             onClick={() => deleteComment(msg.id)}
-                            className="text-slate-400 hover:text-slate-300 transition-colors"
+                            className="text-xs text-slate-400 hover:text-slate-300 hover:underline transition-colors cursor-pointer"
                             title="Delete"
                           >
-                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                              <polyline points="3,6 5,6 21,6" />
-                              <path d="m19,6v14a2,2 0 0,1-2,2H7a2,2 0 0,1-2-2V6m3,0V4a2,2 0 0,1,2-2h4a2,2 0 0,1,2,2v2" />
-                            </svg>
-                          </button>
+                            🗑
+                          </span>
                         </div>
                       )}
                     </div>

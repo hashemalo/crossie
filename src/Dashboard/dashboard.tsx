@@ -120,7 +120,7 @@ export default function Dashboard() {
       <div className="border-b border-slate-700 p-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-blue-400 mb-1">Crossie Dashboard</h1>
+            <h1 className="text-2xl font-bold text-blue-400 mb-1">Dashboard</h1>
             <p className="text-slate-400 text-sm">
               Welcome back, {authState.profile?.username}
             </p>
@@ -234,16 +234,6 @@ export default function Dashboard() {
                     className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
                   >
                     View Page
-                  </button>
-                  <span className="text-slate-600">•</span>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(comment.body);
-                      // You could add a toast notification here
-                    }}
-                    className="text-xs text-slate-400 hover:text-slate-300 transition-colors"
-                  >
-                    Copy
                   </button>
                 </div>
               </div>
