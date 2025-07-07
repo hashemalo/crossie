@@ -87,14 +87,29 @@ export default function AuthCallbackPage() {
       console.log('handleAuthCallback called for user:', currentSession.user.id)
       setStatus('loading')
 
-      // Check if profile exists
-      const { data: profile, error: profileError } = await supabase
+      console.log('About to query profiles table...')
+      
+      // Add a timeout to the profile query
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Profile query timed out after 10 seconds')), 10000)
+      )
+      
+      const profileQueryPromise = supabase
         .from('profiles')
         .select('*')
         .eq('id', currentSession.user.id)
         .maybeSingle()
 
+      // Race between the query and timeout
+      const { data: profile, error: profileError } = await Promise.race([
+        profileQueryPromise,
+        timeoutPromise
+      ]) as any
+
+      console.log('Profile query completed:', { profile, profileError })
+
       if (profileError && profileError.code !== 'PGRST116') {
+        console.error('Profile query error:', profileError)
         throw profileError
       }
 
