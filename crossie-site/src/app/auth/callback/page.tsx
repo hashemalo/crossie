@@ -31,6 +31,7 @@ export default function AuthCallbackPage() {
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
         setSession(currentSession)
         setUser(currentSession.user)
+        setStatus('success')
         
         // Only process initial sign-in, not token refreshes
         if (event === 'SIGNED_IN') {
