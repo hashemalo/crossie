@@ -92,11 +92,8 @@ export default function Crossie() {
         
         if (authData?.access_token) {
           console.log('[Crossie] Setting auth in Supabase client');
-          // Update Supabase client with new token and user data
-          await supabaseAuthClient.setAuth(authData.access_token, {
-            id: authData.user.id,
-            email: authData.user.email
-          });
+          // Update Supabase client with new token
+          await supabaseAuthClient.setAuth(authData.access_token);
           
           // Verify auth is working by testing a simple query
           console.log('[Crossie] Verifying auth with test query');
@@ -347,12 +344,10 @@ export default function Crossie() {
       error: readError 
     });
     
-    // Get current user from auth
-    const { data: { user: currentUser } } = await supabase.auth.getUser();
-    console.log('[Crossie] Current Supabase user:', {
-      hasUser: !!currentUser,
-      userId: currentUser?.id,
-      matchesAuthState: currentUser?.id === authState.user.id
+    // Log current token
+    console.log('[Crossie] Current token:', {
+      hasToken: !!supabaseAuthClient.getCurrentToken(),
+      tokenPrefix: supabaseAuthClient.getCurrentToken()?.substring(0, 20) + '...'
     });
     
     const { error: insertErr } = await supabase.from("comments").insert({

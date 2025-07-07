@@ -1,41 +1,53 @@
 // lib/supabaseClient.ts
-import { createClient, SupabaseClient, type Session, type User } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 class SupabaseAuthClient {
   private client: SupabaseClient;
   private url = "https://sxargqkknhkcfvhbttrh.supabase.co";
   private anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4YXJncWtrbmhrY2Z2aGJ0dHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MzEyMDAsImV4cCI6MjA2NjMwNzIwMH0.Q70cLGf69Al2prKMDSkCTnCGTuiKGY-MFK2tQ1g2T-k";
+  private currentToken: string | null = null;
 
   constructor() {
+    // Create a single client instance with custom fetch
     this.client = createClient(this.url, this.anonKey, {
       auth: {
-        persistSession: false, // Don't persist in iframe context
-        autoRefreshToken: false, // We'll handle refresh through extension
-        detectSessionInUrl: false // Don't check URL for sessions
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+        storage: {
+          getItem: () => null,
+          setItem: () => {},
+          removeItem: () => {}
+        }
+      },
+      global: {
+        fetch: this.customFetch.bind(this)
       }
     });
   }
 
-  // Decode JWT to extract user info
-  private decodeJWT(token: string): any {
-    try {
-      const base64Url = token.split('.')[1];
-      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      const jsonPayload = decodeURIComponent(
-        atob(base64)
-          .split('')
-          .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-          .join('')
-      );
-      return JSON.parse(jsonPayload);
-    } catch (error) {
-      console.error('[SupabaseAuthClient] Failed to decode JWT:', error);
-      return null;
+  // Custom fetch that injects our auth token
+  private customFetch(url: RequestInfo | URL, options: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(options.headers || {});
+    
+    // If we have a token and this is a request to our Supabase instance, add auth header
+    if (this.currentToken && url.toString().includes(this.url)) {
+      headers.set('Authorization', `Bearer ${this.currentToken}`);
+      console.log('[SupabaseAuthClient] Adding auth header to request:', {
+        url: url.toString(),
+        hasToken: true,
+        tokenPrefix: this.currentToken.substring(0, 20) + '...'
+      });
     }
+
+    return fetch(url, {
+      ...options,
+      headers
+    });
   }
 
-  // Update the client with a new access token and user data
-  async setAuth(accessToken: string | null, userData?: { id: string; email?: string }) {
+  // Update the auth token
+  async setAuth(accessToken: string | null) {
     console.log('[SupabaseAuthClient] Setting auth token:', accessToken ? 'Token present' : 'No token');
     
     if (accessToken) {
@@ -45,72 +57,30 @@ class SupabaseAuthClient {
         isJWT: accessToken.split('.').length === 3
       });
       
+      // Store the token
+      this.currentToken = accessToken;
+      
+      console.log('[SupabaseAuthClient] Token stored, will be injected via custom fetch');
+      
+      // Verify the token works
       try {
-        // Decode the JWT to get claims
-        const jwtPayload = this.decodeJWT(accessToken);
-        console.log('[SupabaseAuthClient] JWT payload:', {
-          sub: jwtPayload?.sub,
-          email: jwtPayload?.email,
-          exp: jwtPayload?.exp,
-          role: jwtPayload?.role
-        });
-
-        // Create user object from JWT claims and provided data
-        const user: User = {
-          id: userData?.id || jwtPayload?.sub || '',
-          aud: jwtPayload?.aud || 'authenticated',
-          role: jwtPayload?.role || 'authenticated',
-          email: userData?.email || jwtPayload?.email || '',
-          email_confirmed_at: jwtPayload?.email_confirmed_at || new Date().toISOString(),
-          phone: jwtPayload?.phone || '',
-          confirmed_at: jwtPayload?.confirmed_at || new Date().toISOString(),
-          last_sign_in_at: new Date().toISOString(),
-          app_metadata: jwtPayload?.app_metadata || {},
-          user_metadata: jwtPayload?.user_metadata || {},
-          identities: jwtPayload?.identities || [],
-          created_at: jwtPayload?.created_at || new Date().toISOString(),
-          updated_at: jwtPayload?.updated_at || new Date().toISOString()
-        };
-
-        // Create a complete session object
-        const session: Session = {
-          access_token: accessToken,
-          token_type: 'bearer',
-          expires_in: jwtPayload?.exp ? jwtPayload.exp - Math.floor(Date.now() / 1000) : 3600,
-          expires_at: jwtPayload?.exp || Math.floor(Date.now() / 1000) + 3600,
-          refresh_token: '', // We don't have refresh token in iframe
-          user: user
-        };
-
-        console.log('[SupabaseAuthClient] Setting session with user:', {
-          userId: user.id,
-          email: user.email
-        });
-
-        // Set the session
-        const { data, error } = await this.client.auth.setSession(session);
-        
-        if (error) {
-          console.error('[SupabaseAuthClient] Error setting session:', error);
-        } else {
-          console.log('[SupabaseAuthClient] Session set successfully');
+        const { data, error } = await this.client
+          .from('profiles')
+          .select('id')
+          .limit(1);
           
-          // Verify the session was set
-          const { data: { user: currentUser } } = await this.client.auth.getUser();
-          console.log('[SupabaseAuthClient] Verified current user:', {
-            hasUser: !!currentUser,
-            userId: currentUser?.id,
-            email: currentUser?.email
-          });
+        if (error) {
+          console.error('[SupabaseAuthClient] Auth verification failed:', error);
+        } else {
+          console.log('[SupabaseAuthClient] Auth verification successful - token is working');
         }
-        
-      } catch (error) {
-        console.error('[SupabaseAuthClient] Error in setAuth:', error);
+      } catch (err) {
+        console.error('[SupabaseAuthClient] Error verifying auth:', err);
       }
     } else {
-      // Clear auth if no token
+      // Clear auth
       console.log('[SupabaseAuthClient] Clearing auth state');
-      await this.client.auth.signOut();
+      this.currentToken = null;
     }
   }
 
@@ -118,12 +88,17 @@ class SupabaseAuthClient {
   getClient(): SupabaseClient {
     return this.client;
   }
+
+  // Get current token
+  getCurrentToken(): string | null {
+    return this.currentToken;
+  }
 }
 
 // Create a singleton instance
 const supabaseAuth = new SupabaseAuthClient();
 
-// Export the client getter for backward compatibility
+// Export the same client instance always
 export const supabase = supabaseAuth.getClient();
 
 // Export the auth client for setting tokens
