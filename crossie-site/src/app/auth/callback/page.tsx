@@ -13,6 +13,7 @@ export default function AuthCallbackPage() {
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [isSigningOut, setIsSigningOut] = useState(false)
+  const [hasProcessedInitialAuth, setHasProcessedInitialAuth] = useState(false)
 
   useEffect(() => {
     // Set up auth state listener
@@ -25,16 +26,18 @@ export default function AuthCallbackPage() {
         setSession(null)
         setUser(null)
         setStatus('signed_out')
+        setHasProcessedInitialAuth(false)
         return
       }
 
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
         setSession(currentSession)
         setUser(currentSession.user)
-        setStatus('success')
         
-        // Only process initial sign-in, not token refreshes
-        if (event === 'SIGNED_IN') {
+        // Only process sign-in events, not token refreshes
+        // And only if we haven't already processed initial auth
+        if (event === 'SIGNED_IN' && !hasProcessedInitialAuth) {
+          console.log('Processing SIGNED_IN event')
           await handleAuthCallback(currentSession)
         }
       }
@@ -45,10 +48,13 @@ export default function AuthCallbackPage() {
 
     // Cleanup subscription on unmount
     return () => subscription.unsubscribe()
-  }, [])
+  }, [hasProcessedInitialAuth])
 
   const handleInitialAuth = async () => {
+    if (hasProcessedInitialAuth) return
+    
     try {
+      console.log('Starting initial auth check')
       const { data: { session: initialSession }, error: sessionError } = await supabase.auth.getSession()
       
       if (sessionError) {
@@ -56,41 +62,29 @@ export default function AuthCallbackPage() {
       }
 
       if (!initialSession) {
+        console.log('No initial session found')
         setStatus('signed_out')
+        setHasProcessedInitialAuth(true)
         return
       }
 
+      console.log('Initial session found, processing...')
       setSession(initialSession)
       setUser(initialSession.user)
+      setHasProcessedInitialAuth(true)
       
-      // Check if user already has a profile - if so, redirect to success
-      const { data: existingProfile, error: profileError } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', initialSession.user.id)
-        .maybeSingle()
-
-      if (profileError && profileError.code !== 'PGRST116') {
-        throw profileError
-      }
-
-      if (existingProfile) {
-        // User already has a profile, send auth to extension and redirect to success
-        await sendAuthToExtension(initialSession, existingProfile)
-        setStatus('success')
-      } else {
-        // No profile exists, proceed with normal callback flow
-        await handleAuthCallback(initialSession)
-      }
+      await handleAuthCallback(initialSession)
     } catch (error: any) {
       console.error('Initial auth error:', error)
       setError(error.message || 'Authentication failed')
       setStatus('error')
+      setHasProcessedInitialAuth(true)
     }
   }
 
   const handleAuthCallback = async (currentSession: Session) => {
     try {
+      console.log('handleAuthCallback called for user:', currentSession.user.id)
       setStatus('loading')
 
       // Check if profile exists
@@ -105,6 +99,7 @@ export default function AuthCallbackPage() {
       }
 
       if (!profile) {
+        console.log('No profile found, showing profile creation form')
         // Need to create profile
         const displayName = currentSession.user.user_metadata?.full_name || 
                            currentSession.user.user_metadata?.name || 
@@ -113,6 +108,7 @@ export default function AuthCallbackPage() {
         setUsername(displayName.replace(/[^a-zA-Z0-9_]/g, ''))
         setStatus('profile')
       } else {
+        console.log('Profile found, sending to extension and setting success')
         // Profile exists, send token to extension
         await sendAuthToExtension(currentSession, profile)
         setStatus('success')
@@ -237,7 +233,7 @@ export default function AuthCallbackPage() {
           <div className="text-center">
             <div className="w-20 h-20 bg-slate-600 rounded-full mx-auto flex items-center justify-center mb-4">
               <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3-3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
               </svg>
             </div>
             <h2 className="text-2xl font-bold text-white mb-2">Signed Out</h2>
