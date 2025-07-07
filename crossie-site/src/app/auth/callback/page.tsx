@@ -15,86 +15,51 @@ export default function AuthCallbackPage() {
   const [isSigningOut, setIsSigningOut] = useState(false)
 
   useEffect(() => {
-    let isProcessing = false
+    let hasProcessed = false
 
-    const processAuth = async (currentSession: Session | null) => {
-      if (isProcessing) {
-        console.log('Already processing auth, skipping...')
+    const processAuthOnce = async (currentSession: Session | null) => {
+      if (hasProcessed) {
+        console.log('Auth already processed, skipping...')
         return
       }
       
       if (!currentSession) {
-        console.log('No session, setting signed out')
+        console.log('No session found')
         setStatus('signed_out')
         return
       }
 
-      try {
-        isProcessing = true
-        console.log('Processing auth for user:', currentSession.user.id)
-        setSession(currentSession)
-        setUser(currentSession.user)
-        setStatus('loading')
+      hasProcessed = true
+      console.log('Processing auth for user:', currentSession.user.id)
+      
+      setSession(currentSession)
+      setUser(currentSession.user)
 
-        console.log('Checking if profile exists...')
-        
-        // Add a timeout wrapper to the database query
-        const profileQuery = supabase
+      try {
+        // Quick profile check
+        const { data: profile, error: profileError } = await supabase
           .from('profiles')
           .select('username, email, id')
           .eq('id', currentSession.user.id)
           .single()
-        
-        console.log('Profile query created, executing...')
-        
-        // Create a timeout promise
-        const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => {
-            console.error('Profile query timed out after 5 seconds')
-            reject(new Error('Database query timed out. This usually means there are permission issues with the profiles table.'))
-          }, 5000)
-        })
-        
-        // Race the query against the timeout
-        const { data: profile, error: profileError } = await Promise.race([
-          profileQuery,
-          timeoutPromise
-        ]) as any
 
-        console.log('Profile check result:', { profile, profileError })
-
-        if (profileError) {
-          console.log('Profile error details:', profileError)
+        if (profileError && profileError.code === 'PGRST116') {
+          // No profile found
+          console.log('No profile found, showing profile creation')
+          const displayName = currentSession.user.user_metadata?.full_name || 
+                             currentSession.user.user_metadata?.name || 
+                             currentSession.user.email?.split('@')[0] || ''
           
-          if (profileError.message?.includes('timed out') || profileError.message?.includes('permission')) {
-            // Database issue - skip profile check and go straight to profile creation
-            console.log('Database issue detected, assuming no profile exists')
-            const displayName = currentSession.user.user_metadata?.full_name || 
-                               currentSession.user.user_metadata?.name || 
-                               currentSession.user.email?.split('@')[0] || ''
-            
-            setUsername(displayName.replace(/[^a-zA-Z0-9_]/g, ''))
-            setStatus('profile')
-            return
-          }
-          
-          if (profileError.code === 'PGRST116') {
-            // No profile found (404 error)
-            console.log('No profile found, showing profile creation')
-            const displayName = currentSession.user.user_metadata?.full_name || 
-                               currentSession.user.user_metadata?.name || 
-                               currentSession.user.email?.split('@')[0] || ''
-            
-            setUsername(displayName.replace(/[^a-zA-Z0-9_]/g, ''))
-            setStatus('profile')
-          } else {
-            // Other database error
-            console.error('Database error:', profileError)
-            throw new Error(`Database error: ${profileError.message}`)
-          }
+          setUsername(displayName.replace(/[^a-zA-Z0-9_]/g, ''))
+          setStatus('profile')
+        } else if (profileError) {
+          // Database error
+          console.error('Database error:', profileError)
+          setError(`Database error: ${profileError.message}`)
+          setStatus('error')
         } else {
-          // Profile exists
-          console.log('Profile found, sending to extension')
+          // Profile exists - go straight to success
+          console.log('Profile found, going to success')
           await sendAuthToExtension(currentSession, profile)
           setStatus('success')
         }
@@ -102,55 +67,36 @@ export default function AuthCallbackPage() {
         console.error('Auth processing error:', error)
         setError(error.message || 'Authentication failed')
         setStatus('error')
-      } finally {
-        isProcessing = false
       }
     }
 
-    // Set up auth state listener
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
-      console.log('Auth state changed:', event, currentSession?.user?.id)
-      
-      if (event === 'SIGNED_OUT') {
-        setSession(null)
-        setUser(null)
-        setStatus('signed_out')
-        isProcessing = false
-        return
-      }
-
-      // Only process on initial sign-in, not token refreshes
-      if (event === 'SIGNED_IN') {
-        await processAuth(currentSession)
-      }
-    })
-
-    // Handle initial auth state (for users already signed in)
-    const handleInitialAuth = async () => {
+    // Only check initial auth state - ignore the auth state listener for now
+    const checkAuth = async () => {
       try {
-        console.log('Checking initial auth state...')
-        const { data: { session: initialSession }, error: sessionError } = await supabase.auth.getSession()
-        
-        if (sessionError) {
-          throw sessionError
-        }
-
-        await processAuth(initialSession)
+        const { data: { session }, error } = await supabase.auth.getSession()
+        if (error) throw error
+        await processAuthOnce(session)
       } catch (error: any) {
-        console.error('Initial auth error:', error)
+        console.error('Initial auth check error:', error)
         setError(error.message || 'Authentication failed')
         setStatus('error')
       }
     }
 
-    handleInitialAuth()
+    checkAuth()
 
-    // Cleanup subscription on unmount
+    // Minimal auth listener just for sign out
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setStatus('signed_out')
+        setSession(null)
+        setUser(null)
+        hasProcessed = false
+      }
+    })
+
     return () => {
       subscription.unsubscribe()
-      isProcessing = false
     }
   }, [])
 
@@ -197,7 +143,6 @@ export default function AuthCallbackPage() {
       const { error } = await supabase.auth.signOut()
       if (error) throw error
       
-      // The auth state listener will handle the UI update
     } catch (error: any) {
       console.error('Sign out error:', error)
       setError(error.message || 'Sign out failed')
@@ -208,28 +153,32 @@ export default function AuthCallbackPage() {
 
   const sendAuthToExtension = async (currentSession: Session, profile: any) => {
     console.log('Attempting to send auth to extension...');
-    const token = generateExtensionToken(currentSession.user.id)
     
-    const authData = {
-      access_token: currentSession.access_token,
-      refresh_token: currentSession.refresh_token,
-      user: currentSession.user,
-      profile: profile,
-      expires_at: currentSession.expires_at,
-      // Include Supabase config for the extension
-      supabase_config: {
-        url: "https://sxargqkknhkcfvhbttrh.supabase.co",
-        anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4YXJncWtrbmhrY2Z2aGJ0dHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MzEyMDAsImV4cCI6MjA2NjMwNzIwMH0.Q70cLGf69Al2prKMDSkCTnCGTuiKGY-MFK2tQ1g2T-k"
+    try {
+      const token = generateExtensionToken(currentSession.user.id)
+      
+      const authData = {
+        access_token: currentSession.access_token,
+        refresh_token: currentSession.refresh_token,
+        user: currentSession.user,
+        profile: profile,
+        expires_at: currentSession.expires_at,
+        supabase_config: {
+          url: "https://sxargqkknhkcfvhbttrh.supabase.co",
+          anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4YXJncWtrbmhrY2Z2aGJ0dHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MzEyMDAsImV4cCI6MjA2NjMwNzIwMH0.Q70cLGf69Al2prKMDSkCTnCGTuiKGY-MFK2tQ1g2T-k"
+        }
       }
-    }
 
-    console.log('Auth data prepared:', { userId: currentSession.user.id, profile: profile.username });
+      console.log('Auth data prepared:', { userId: currentSession.user.id, profile: profile.username });
 
-    const sent = await sendTokenToExtension(token, authData)
-    if (!sent) {
-      console.warn('Could not send token to extension directly')
-    } else {
-      console.log('Token sent to extension successfully');
+      const sent = await sendTokenToExtension(token, authData)
+      if (!sent) {
+        console.warn('Could not send token to extension directly')
+      } else {
+        console.log('Token sent to extension successfully');
+      }
+    } catch (error) {
+      console.error('Error sending auth to extension:', error)
     }
   }
 
