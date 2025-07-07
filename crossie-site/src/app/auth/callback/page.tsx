@@ -36,7 +36,7 @@ export default function AuthCallbackPage() {
         setUser(currentSession.user)
         setStatus('loading')
 
-        console.log('Checking if profile exists...')
+        console.log('Checking if profile exists...', currentSession.user.id)
         
         // Simple profile check with better error handling
         const { data: profile, error: profileError } = await supabase
