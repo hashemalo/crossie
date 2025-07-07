@@ -36,18 +36,48 @@ export default function AuthCallbackPage() {
         setUser(currentSession.user)
         setStatus('loading')
 
-        console.log('Checking if profile exists...', currentSession.user.id)
+        console.log('Checking if profile exists...')
         
-        // Simple profile check with better error handling
-        const { data: profile, error: profileError } = await supabase
+        // Add a timeout wrapper to the database query
+        const profileQuery = supabase
           .from('profiles')
           .select('username, email, id')
           .eq('id', currentSession.user.id)
           .single()
+        
+        console.log('Profile query created, executing...')
+        
+        // Create a timeout promise
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => {
+            console.error('Profile query timed out after 5 seconds')
+            reject(new Error('Database query timed out. This usually means there are permission issues with the profiles table.'))
+          }, 5000)
+        })
+        
+        // Race the query against the timeout
+        const { data: profile, error: profileError } = await Promise.race([
+          profileQuery,
+          timeoutPromise
+        ]) as any
 
         console.log('Profile check result:', { profile, profileError })
 
         if (profileError) {
+          console.log('Profile error details:', profileError)
+          
+          if (profileError.message?.includes('timed out') || profileError.message?.includes('permission')) {
+            // Database issue - skip profile check and go straight to profile creation
+            console.log('Database issue detected, assuming no profile exists')
+            const displayName = currentSession.user.user_metadata?.full_name || 
+                               currentSession.user.user_metadata?.name || 
+                               currentSession.user.email?.split('@')[0] || ''
+            
+            setUsername(displayName.replace(/[^a-zA-Z0-9_]/g, ''))
+            setStatus('profile')
+            return
+          }
+          
           if (profileError.code === 'PGRST116') {
             // No profile found (404 error)
             console.log('No profile found, showing profile creation')
