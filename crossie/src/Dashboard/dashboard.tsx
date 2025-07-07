@@ -115,7 +115,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="w-full max-w-4xl mx-auto bg-slate-900 text-white min-h-screen">
+    <div className="w-full max-w-2xl mx-auto bg-slate-900 text-white min-h-screen">
       {/* Header */}
       <div className="border-b border-slate-700 p-6">
         <div className="flex items-center justify-between">
