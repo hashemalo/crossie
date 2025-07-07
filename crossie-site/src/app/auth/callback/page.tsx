@@ -160,8 +160,8 @@ export default function AuthCallbackPage() {
       expires_at: currentSession.expires_at,
       // Include Supabase config for the extension
       supabase_config: {
-        url: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+        url: "https://sxargqkknhkcfvhbttrh.supabase.co",
+        anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4YXJncWtrbmhrY2Z2aGJ0dHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MzEyMDAsImV4cCI6MjA2NjMwNzIwMH0.Q70cLGf69Al2prKMDSkCTnCGTuiKGY-MFK2tQ1g2T-k"
       }
     }
 

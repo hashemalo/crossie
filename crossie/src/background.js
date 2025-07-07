@@ -82,7 +82,7 @@ chrome.runtime.onMessageExternal.addListener(
   function(request, sender, sendResponse) {
     
     // Verify the sender - update this to match your website URL
-    const allowedOrigins = ['https://crossie.app', 'http://localhost:3000'];
+    const allowedOrigins = ['https://trycrossie.vercel.app', 'http://localhost:3000'];
     if (!allowedOrigins.includes(sender.origin)) {
       console.error('Invalid sender origin:', sender.origin);
       return;

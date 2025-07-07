@@ -29,7 +29,7 @@
     "scopes": [""]
   },
   "externally_connectable": {
-    "matches": ["https://crossie.app/*", "http://localhost:3000/*"]
+    "matches": ["https://trycrossie.vercel.app/*", "http://localhost:3000/*"]
   },
   "permissions": ["storage", "activeTab", "identity"],
   "action": {
