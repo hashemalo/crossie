@@ -5,7 +5,7 @@ import {
 } from "../shared/authService";
 import Dashboard from "../Dashboard/dashboard";
 
-const WEBSITE_URL = import.meta.env.VITE_WEBSITE_URL || "http://localhost:3000";
+const WEBSITE_URL = "https://trycrossie.vercel.app";
 
 type AuthView = "loading" | "signin" | "waiting" | "success" | "hub";
 

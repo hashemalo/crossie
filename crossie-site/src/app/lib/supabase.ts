@@ -22,8 +22,8 @@ export function generateExtensionToken(userId: string): string {
 
 // Send message to extension
 export async function sendTokenToExtension(token: string, sessionData: any) {
-  const extensionId = process.env.NEXT_PUBLIC_EXTENSION_ID
-  
+  const extensionId = "hfcbcikkdedakcklfikiblmpphmamfal"
+
   if (!extensionId) {
     console.error('Extension ID not configured')
     // During development, try using broadcast channel as fallback
