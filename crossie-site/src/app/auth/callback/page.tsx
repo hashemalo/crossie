@@ -61,7 +61,26 @@ export default function AuthCallbackPage() {
 
       setSession(initialSession)
       setUser(initialSession.user)
-      await handleAuthCallback(initialSession)
+      
+      // Check if user already has a profile - if so, redirect to success
+      const { data: existingProfile, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', initialSession.user.id)
+        .maybeSingle()
+
+      if (profileError && profileError.code !== 'PGRST116') {
+        throw profileError
+      }
+
+      if (existingProfile) {
+        // User already has a profile, send auth to extension and redirect to success
+        await sendAuthToExtension(initialSession, existingProfile)
+        setStatus('success')
+      } else {
+        // No profile exists, proceed with normal callback flow
+        await handleAuthCallback(initialSession)
+      }
     } catch (error: any) {
       console.error('Initial auth error:', error)
       setError(error.message || 'Authentication failed')

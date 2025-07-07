@@ -67,19 +67,26 @@ class AuthService {
   }
 
   // Get Supabase config from storage or fallback
-  private async getSupabaseConfig(): Promise<SupabaseConfig | null> {
-    try {
-      const result = await chrome.storage.local.get(['supabase_config']);
-      if (result.supabase_config) {
-        return result.supabase_config;
-      }
-    } catch (error) {
-      console.warn('Could not get Supabase config from storage:', error);
-    }
+  private async getSupabaseConfig(): Promise<SupabaseConfig> {
+  const DEFAULT_CONFIG: SupabaseConfig = {
+    url: 'https://sxargqkknhkcfvhbttrh.supabase.co',
+    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4YXJncWtrbmhrY2Z2aGJ0dHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MzEyMDAsImV4cCI6MjA2NjMwNzIwMH0.Q70cLGf69Al2prKMDSkCTnCGTuiKGY-MFK2tQ1g2T-k'
+  };
 
-    // Return null if no config found - components should handle this
-    return null;
+  try {
+    const result = await chrome.storage.local.get(['supabase_config']);
+    if (result.supabase_config) {
+      return result.supabase_config;
+    } else {
+      // save defaults on first run
+      await chrome.storage.local.set({ supabase_config: DEFAULT_CONFIG });
+      return DEFAULT_CONFIG;
+    }
+  } catch (error) {
+    console.warn('Could not get Supabase config from storage:', error);
+    return DEFAULT_CONFIG;
   }
+}
 
   // Check current authentication state
   async checkAuthState(): Promise<AuthState> {
@@ -142,6 +149,7 @@ class AuthService {
   private async fetchProfile(userId: string, accessToken?: string): Promise<Profile | null> {
     try {
       const config = await this.getSupabaseConfig();
+      console.log('Supabase config:', config);
       if (!config) return null;
 
       // Try authenticated request first
