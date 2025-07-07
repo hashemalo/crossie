@@ -13,127 +13,116 @@ export default function AuthCallbackPage() {
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [isSigningOut, setIsSigningOut] = useState(false)
-  const [hasProcessedInitialAuth, setHasProcessedInitialAuth] = useState(false)
 
   useEffect(() => {
+    let isProcessing = false
+
+    const processAuth = async (currentSession: Session | null) => {
+      if (isProcessing) {
+        console.log('Already processing auth, skipping...')
+        return
+      }
+      
+      if (!currentSession) {
+        console.log('No session, setting signed out')
+        setStatus('signed_out')
+        return
+      }
+
+      try {
+        isProcessing = true
+        console.log('Processing auth for user:', currentSession.user.id)
+        setSession(currentSession)
+        setUser(currentSession.user)
+        setStatus('loading')
+
+        console.log('Checking if profile exists...')
+        
+        // Simple profile check with better error handling
+        const { data: profile, error: profileError } = await supabase
+          .from('profiles')
+          .select('username, email, id')
+          .eq('id', currentSession.user.id)
+          .single()
+
+        console.log('Profile check result:', { profile, profileError })
+
+        if (profileError) {
+          if (profileError.code === 'PGRST116') {
+            // No profile found (404 error)
+            console.log('No profile found, showing profile creation')
+            const displayName = currentSession.user.user_metadata?.full_name || 
+                               currentSession.user.user_metadata?.name || 
+                               currentSession.user.email?.split('@')[0] || ''
+            
+            setUsername(displayName.replace(/[^a-zA-Z0-9_]/g, ''))
+            setStatus('profile')
+          } else {
+            // Other database error
+            console.error('Database error:', profileError)
+            throw new Error(`Database error: ${profileError.message}`)
+          }
+        } else {
+          // Profile exists
+          console.log('Profile found, sending to extension')
+          await sendAuthToExtension(currentSession, profile)
+          setStatus('success')
+        }
+      } catch (error: any) {
+        console.error('Auth processing error:', error)
+        setError(error.message || 'Authentication failed')
+        setStatus('error')
+      } finally {
+        isProcessing = false
+      }
+    }
+
     // Set up auth state listener
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, currentSession) => {
       console.log('Auth state changed:', event, currentSession?.user?.id)
       
-      if (event === 'SIGNED_OUT' || !currentSession) {
+      if (event === 'SIGNED_OUT') {
         setSession(null)
         setUser(null)
         setStatus('signed_out')
-        setHasProcessedInitialAuth(false)
+        isProcessing = false
         return
       }
 
-      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-        setSession(currentSession)
-        setUser(currentSession.user)
-        
-        // Only process sign-in events, not token refreshes
-        // And only if we haven't already processed initial auth
-        if (event === 'SIGNED_IN' && !hasProcessedInitialAuth) {
-          console.log('Processing SIGNED_IN event')
-          await handleAuthCallback(currentSession)
-        }
+      // Only process on initial sign-in, not token refreshes
+      if (event === 'SIGNED_IN') {
+        await processAuth(currentSession)
       }
     })
 
-    // Handle initial auth state
+    // Handle initial auth state (for users already signed in)
+    const handleInitialAuth = async () => {
+      try {
+        console.log('Checking initial auth state...')
+        const { data: { session: initialSession }, error: sessionError } = await supabase.auth.getSession()
+        
+        if (sessionError) {
+          throw sessionError
+        }
+
+        await processAuth(initialSession)
+      } catch (error: any) {
+        console.error('Initial auth error:', error)
+        setError(error.message || 'Authentication failed')
+        setStatus('error')
+      }
+    }
+
     handleInitialAuth()
 
     // Cleanup subscription on unmount
-    return () => subscription.unsubscribe()
-  }, [hasProcessedInitialAuth])
-
-  const handleInitialAuth = async () => {
-    if (hasProcessedInitialAuth) return
-    
-    try {
-      console.log('Starting initial auth check')
-      const { data: { session: initialSession }, error: sessionError } = await supabase.auth.getSession()
-      
-      if (sessionError) {
-        throw sessionError
-      }
-
-      if (!initialSession) {
-        console.log('No initial session found')
-        setStatus('signed_out')
-        setHasProcessedInitialAuth(true)
-        return
-      }
-
-      console.log('Initial session found, processing...')
-      setSession(initialSession)
-      setUser(initialSession.user)
-      setHasProcessedInitialAuth(true)
-      
-      await handleAuthCallback(initialSession)
-    } catch (error: any) {
-      console.error('Initial auth error:', error)
-      setError(error.message || 'Authentication failed')
-      setStatus('error')
-      setHasProcessedInitialAuth(true)
+    return () => {
+      subscription.unsubscribe()
+      isProcessing = false
     }
-  }
-
-  const handleAuthCallback = async (currentSession: Session) => {
-    try {
-      console.log('handleAuthCallback called for user:', currentSession.user.id)
-      setStatus('loading')
-
-      console.log('About to query profiles table...')
-      
-      // Add a timeout to the profile query
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Profile query timed out after 10 seconds')), 10000)
-      )
-      
-      const profileQueryPromise = supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', currentSession.user.id)
-        .maybeSingle()
-
-      // Race between the query and timeout
-      const { data: profile, error: profileError } = await Promise.race([
-        profileQueryPromise,
-        timeoutPromise
-      ]) as any
-
-      console.log('Profile query completed:', { profile, profileError })
-
-      if (profileError && profileError.code !== 'PGRST116') {
-        console.error('Profile query error:', profileError)
-        throw profileError
-      }
-
-      if (!profile) {
-        console.log('No profile found, showing profile creation form')
-        // Need to create profile
-        const displayName = currentSession.user.user_metadata?.full_name || 
-                           currentSession.user.user_metadata?.name || 
-                           currentSession.user.email?.split('@')[0] || ''
-        
-        setUsername(displayName.replace(/[^a-zA-Z0-9_]/g, ''))
-        setStatus('profile')
-      } else {
-        console.log('Profile found, sending to extension and setting success')
-        // Profile exists, send token to extension
-        await sendAuthToExtension(currentSession, profile)
-        setStatus('success')
-      }
-    } catch (error: any) {
-      console.error('Auth callback error:', error)
-      setError(error.message || 'Authentication failed')
-      setStatus('error')
-    }
-  }
+  }, [])
 
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -141,9 +130,11 @@ export default function AuthCallbackPage() {
     try {
       if (!user || !session) throw new Error('No user or session found')
 
+      console.log('Creating profile for user:', user.id)
+      
       const { data, error } = await supabase
         .from('profiles')
-        .upsert({
+        .insert({
           id: user.id,
           username: username.trim(),
           email: user.email,
@@ -152,12 +143,18 @@ export default function AuthCallbackPage() {
         .select()
         .single()
 
-      if (error) throw error
+      if (error) {
+        console.error('Profile creation error:', error)
+        throw error
+      }
 
+      console.log('Profile created successfully:', data)
+      
       // Send to extension
       await sendAuthToExtension(session, data)
       setStatus('success')
     } catch (error: any) {
+      console.error('Save profile error:', error)
       setError(error.message)
     }
   }
