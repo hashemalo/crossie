@@ -102,6 +102,46 @@
     }, 200);
   }
 
+  // Function to send auth state to iframe
+  async function sendAuthToIframe() {
+    console.log('[Inject] sendAuthToIframe called');
+    
+    // Request auth state from background
+    chrome.runtime.sendMessage({ type: 'GET_AUTH_STATE' }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('[Inject] Error getting auth state:', chrome.runtime.lastError);
+        // Send empty auth state on error
+        iframe.contentWindow?.postMessage({
+          type: 'AUTH_STATE_UPDATE',
+          payload: {
+            authData: null,
+            profile: null
+          }
+        }, '*');
+        return;
+      }
+
+      console.log('[Inject] Received auth state from background:', {
+        hasResponse: !!response,
+        hasAuthData: !!response?.authData,
+        hasProfile: !!response?.profile,
+        userId: response?.authData?.user?.id,
+        profileUsername: response?.profile?.username
+      });
+
+      if (response && iframe.contentWindow) {
+        console.log('[Inject] Sending auth state to iframe');
+        iframe.contentWindow.postMessage({
+          type: 'AUTH_STATE_UPDATE',
+          payload: {
+            authData: response.authData,
+            profile: response.profile
+          }
+        }, '*');
+      }
+    });
+  }
+
   // Message handler for iframe communication
   window.addEventListener("message", (event) => {
     // Only accept messages from our extension
@@ -130,6 +170,12 @@
         showExtension();
         break;
 
+      case "REQUEST_AUTH_STATE":
+        // Iframe is requesting auth state
+        console.log('[Inject] Iframe requested auth state');
+        sendAuthToIframe();
+        break;
+
       default:
         // Unknown message type
         break;
@@ -140,6 +186,7 @@
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const { type, payload } = message || {};
     console.log("Received message from extension:", type, sender, payload);
+    
     switch (type) {
       case "SHOW_EXTENSION":
         showExtension();
@@ -160,12 +207,27 @@
         sendResponse({ success: true });
         break;
 
+      case "AUTH_STATE_CHANGED":
+        // Auth state changed, send update to iframe
+        console.log('[Inject] Auth state changed notification received');
+        sendAuthToIframe();
+        break;
+
       default:
         // Unknown message type
         break;
     }
 
     return true; // Keep message channel open for async response
+  });
+
+  // Send initial auth state when iframe loads
+  iframe.addEventListener('load', () => {
+    console.log('[Inject] Iframe loaded, sending initial auth state');
+    // Wait a bit for iframe to initialize
+    setTimeout(() => {
+      sendAuthToIframe();
+    }, 100);
   });
 
   // Initial setup - start minimized

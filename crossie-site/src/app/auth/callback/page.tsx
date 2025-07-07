@@ -257,7 +257,7 @@ export default function AuthCallbackPage() {
         <div className="bg-slate-800 rounded-lg shadow-xl p-8 max-w-md w-full">
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-blue-400 mb-2">Almost there!</h1>
-            <p className="text-slate-400">Choose a username to complete your profile</p>
+            <p className="text-slate-400">Choose a username to complete your profile {session?.user?.email}</p>
           </div>
 
           {error && (

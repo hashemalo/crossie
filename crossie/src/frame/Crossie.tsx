@@ -4,7 +4,7 @@ import {
   type AuthState,
   type Profile,
 } from "../shared/authService";
-import { supabase } from "../lib/supabaseClient";
+import { supabase, supabaseAuthClient } from "../lib/supabaseClient";
 import { canonicalise } from "../lib/canonicalise";
 
 interface Message {
@@ -21,7 +21,9 @@ interface ParentMessage {
     | "CROSSIE_RESIZE"
     | "CROSSIE_MINIMIZE"
     | "CROSSIE_SHOW"
-    | "OPEN_AUTH_POPUP";
+    | "OPEN_AUTH_POPUP"
+    | "REQUEST_AUTH_STATE"
+    | "AUTH_STATE_UPDATE";
   payload?: any;
 }
 
@@ -45,8 +47,10 @@ export default function Crossie() {
   const url = canonicalise(decodeURIComponent(rawHost));
 
   const [threadId, setThreadId] = useState<string | null>(null);
+  const [authInitialized, setAuthInitialized] = useState(false);
 
   const messagesRef = useRef<HTMLDivElement>(null);
+  const realtimeChannelRef = useRef<any>(null);
 
   function getInitial(str: string): string {
     if (!str) return "?";
@@ -62,21 +66,123 @@ export default function Crossie() {
     return `hsl(${hue}, 60%, 60%)`;
   }
 
-  // on mount:
+  // Initialize auth by requesting from parent
   useEffect(() => {
-    if (!url) return;
+    console.log('[Crossie] Initializing auth listener');
+    
+    // Request initial auth state
+    console.log('[Crossie] Requesting initial auth state from parent');
+    sendToParent({ type: "REQUEST_AUTH_STATE" });
+
+    // Listen for auth updates from parent
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.data?.type === "AUTH_STATE_UPDATE") {
+        console.log('[Crossie] Received AUTH_STATE_UPDATE message:', event.data);
+        
+        const { authData, profile } = event.data.payload || {};
+        
+        console.log('[Crossie] Auth data received:', {
+          hasAuthData: !!authData,
+          hasAccessToken: !!authData?.access_token,
+          hasUser: !!authData?.user,
+          userId: authData?.user?.id,
+          hasProfile: !!profile,
+          profileUsername: profile?.username
+        });
+        
+        if (authData?.access_token) {
+          console.log('[Crossie] Setting auth in Supabase client');
+          // Update Supabase client with new token and user data
+          await supabaseAuthClient.setAuth(authData.access_token, {
+            id: authData.user.id,
+            email: authData.user.email
+          });
+          
+          // Verify auth is working by testing a simple query
+          console.log('[Crossie] Verifying auth with test query');
+          const { data: testData, error: testError } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('id', authData.user.id)
+            .single();
+            
+          if (testError) {
+            console.error('[Crossie] Auth verification failed:', testError);
+          } else {
+            console.log('[Crossie] Auth verification successful:', testData);
+          }
+          
+          // Update local auth state
+          setAuthState({
+            user: authData.user,
+            profile: profile,
+            authenticated: true,
+            loading: false,
+          });
+          setAuthInitialized(true);
+          console.log('[Crossie] Auth state updated successfully');
+        } else {
+          // No auth
+          console.log('[Crossie] No auth data, clearing auth state');
+          await supabaseAuthClient.setAuth(null);
+          setAuthState({
+            user: null,
+            profile: null,
+            authenticated: false,
+            loading: false,
+          });
+          setAuthInitialized(true);
+        }
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+
+    // Request auth state periodically to handle updates
+    const interval = setInterval(() => {
+      console.log('[Crossie] Periodic auth state request');
+      sendToParent({ type: "REQUEST_AUTH_STATE" });
+    }, 30000); // Every 30 seconds
+
+    return () => {
+      window.removeEventListener("message", handleMessage);
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Load thread when URL is available
+  useEffect(() => {
+    if (!url || !authInitialized) {
+      console.log('[Crossie] Skipping thread load:', { url, authInitialized });
+      return;
+    }
+    
+    console.log('[Crossie] Loading thread for URL:', url);
     supabase
       .from("comment_threads")
       .select("id")
       .eq("url", url)
       .maybeSingle()
-      .then(({ data }) => {
-        if (data) setThreadId(data.id);
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('[Crossie] Error loading thread:', error);
+        } else if (data) {
+          console.log('[Crossie] Thread found:', data.id);
+          setThreadId(data.id);
+        } else {
+          console.log('[Crossie] No existing thread for URL');
+        }
       });
-  }, [url]);
+  }, [url, authInitialized]);
 
+  // Set up realtime subscriptions
   useEffect(() => {
-    if (!threadId) return;
+    if (!threadId || !authInitialized) return;
+
+    // Clean up previous channel if exists
+    if (realtimeChannelRef.current) {
+      supabase.removeChannel(realtimeChannelRef.current);
+    }
 
     // Fetch existing comments with joined profile info
     supabase
@@ -120,17 +226,24 @@ export default function Crossie() {
           table: "comments",
           filter: `thread_id=eq.${threadId}`,
         },
-        ({ new: comment }) => {
+        async ({ new: comment }) => {
           if (!comment) return;
+
+          // Fetch the user profile for the new comment
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("id, username")
+            .eq("id", comment.user_id)
+            .single();
 
           setMsgs((cur) => [
             {
               id: comment.id,
               text: comment.body,
               timestamp: new Date(comment.created_at),
-              user: {
+              user: profileData || {
                 id: comment.user_id,
-                username: authState.profile?.username || "Anonymous",
+                username: "Anonymous",
               },
             },
             ...cur,
@@ -164,65 +277,95 @@ export default function Crossie() {
           filter: `thread_id=eq.${threadId}`,
         },
         (payload) => {
-          console.log("DELETE event received:", payload);
           const { old: comment } = payload;
+          if (!comment) return;
 
-          if (!comment) {
-            console.log("No comment data in DELETE payload");
-            return;
-          }
-
-          console.log("Removing comment with ID:", comment.id);
-          setMsgs((cur) => {
-            const filtered = cur.filter((msg) => msg.id !== comment.id);
-            console.log(
-              "Messages before filter:",
-              cur.length,
-              "after filter:",
-              filtered.length
-            );
-            return filtered;
-          });
+          setMsgs((cur) => cur.filter((msg) => msg.id !== comment.id));
         }
       )
       .subscribe();
 
+    realtimeChannelRef.current = channel;
+
     return () => {
-      supabase.removeChannel(channel);
+      if (realtimeChannelRef.current) {
+        supabase.removeChannel(realtimeChannelRef.current);
+        realtimeChannelRef.current = null;
+      }
     };
-  }, [threadId, authState.profile]);
-
-  useEffect(() => {
-    const unsubscribe = authService.subscribe((newState) => {
-      setAuthState(newState);
-      console.log("Crossie auth state updated:", newState);
-    });
-
-    return unsubscribe;
-  }, []);
+  }, [threadId, authInitialized]);
 
   const send = async () => {
-    if (!txt.trim() || !authState.profile || !authState.user) return;
+    console.log('[Crossie] Attempting to send comment');
+    console.log('[Crossie] Current auth state:', {
+      hasProfile: !!authState.profile,
+      profileId: authState.profile?.id,
+      hasUser: !!authState.user,
+      userId: authState.user?.id,
+      authenticated: authState.authenticated
+    });
+    
+    if (!txt.trim() || !authState.profile || !authState.user) {
+      console.log('[Crossie] Send aborted - missing requirements:', {
+        hasText: !!txt.trim(),
+        hasProfile: !!authState.profile,
+        hasUser: !!authState.user
+      });
+      return;
+    }
 
     let tid = threadId;
     if (!tid) {
+      console.log('[Crossie] Creating new thread for URL:', url);
       const { data, error } = await supabase.rpc("get_or_create_thread", {
         p_url: url,
       });
       if (error) {
-        console.error("couldn't make thread:", error);
+        console.error("[Crossie] couldn't make thread:", error);
         return;
       }
       tid = data as string;
+      console.log('[Crossie] Thread created:', tid);
       setThreadId(tid);
     }
 
+    console.log('[Crossie] Inserting comment to thread:', tid);
+    console.log('[Crossie] Insert payload:', {
+      thread_id: tid,
+      user_id: authState.user.id,
+      body: txt.trim()
+    });
+    
+    // First, verify we can read from comments table
+    const { data: readTest, error: readError } = await supabase
+      .from("comments")
+      .select("id")
+      .limit(1);
+      
+    console.log('[Crossie] Read test:', { 
+      canRead: !readError, 
+      error: readError 
+    });
+    
+    // Get current user from auth
+    const { data: { user: currentUser } } = await supabase.auth.getUser();
+    console.log('[Crossie] Current Supabase user:', {
+      hasUser: !!currentUser,
+      userId: currentUser?.id,
+      matchesAuthState: currentUser?.id === authState.user.id
+    });
+    
     const { error: insertErr } = await supabase.from("comments").insert({
       thread_id: tid,
       user_id: authState.user.id,
       body: txt.trim(),
     });
-    if (insertErr) console.error("insert failed:", insertErr);
+    
+    if (insertErr) {
+      console.error("[Crossie] insert failed:", insertErr);
+    } else {
+      console.log('[Crossie] Comment inserted successfully');
+    }
 
     if (messagesRef.current) {
       messagesRef.current.scrollTo({ top: 0, behavior: "smooth" });
@@ -255,9 +398,9 @@ export default function Crossie() {
     setEditingId(null);
     setEditText("");
   };
+
   const deleteComment = async (msgId: string) => {
     if (!confirm("Are you sure you want to delete this comment?")) return;
-
 
     // Optimistic update - remove from UI immediately
     setMsgs((cur) => cur.filter((msg) => msg.id !== msgId));
@@ -266,7 +409,6 @@ export default function Crossie() {
       .from("comments")
       .delete()
       .eq("id", msgId)
-
 
     if (error) {
       console.error("Delete failed:", error);
