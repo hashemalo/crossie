@@ -33,11 +33,6 @@ class SupabaseAuthClient {
     // If we have a token and this is a request to our Supabase instance, add auth header
     if (this.currentToken && url.toString().includes(this.url)) {
       headers.set('Authorization', `Bearer ${this.currentToken}`);
-      console.log('[SupabaseAuthClient] Adding auth header to request:', {
-        url: url.toString(),
-        hasToken: true,
-        tokenPrefix: this.currentToken.substring(0, 20) + '...'
-      });
     }
 
     return fetch(url, {
@@ -48,19 +43,12 @@ class SupabaseAuthClient {
 
   // Update the auth token
   async setAuth(accessToken: string | null) {
-    console.log('[SupabaseAuthClient] Setting auth token:', accessToken ? 'Token present' : 'No token');
     
     if (accessToken) {
-      console.log('[SupabaseAuthClient] Token details:', {
-        length: accessToken.length,
-        prefix: accessToken.substring(0, 20) + '...',
-        isJWT: accessToken.split('.').length === 3
-      });
       
       // Store the token
       this.currentToken = accessToken;
       
-      console.log('[SupabaseAuthClient] Token stored, will be injected via custom fetch');
       
       // Verify the token works
       try {
@@ -71,15 +59,12 @@ class SupabaseAuthClient {
           
         if (error) {
           console.error('[SupabaseAuthClient] Auth verification failed:', error);
-        } else {
-          console.log('[SupabaseAuthClient] Auth verification successful - token is working');
         }
       } catch (err) {
         console.error('[SupabaseAuthClient] Error verifying auth:', err);
       }
     } else {
       // Clear auth
-      console.log('[SupabaseAuthClient] Clearing auth state');
       this.currentToken = null;
     }
   }

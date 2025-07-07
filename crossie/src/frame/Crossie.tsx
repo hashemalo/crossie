@@ -1,6 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
-  authService,
   type AuthState,
   type Profile,
 } from "../shared/authService";
@@ -31,6 +30,37 @@ function sendToParent(message: ParentMessage) {
   window.parent.postMessage(message, "*");
 }
 
+// Memoized helper functions outside component
+const getInitial = (str: string): string => {
+  if (!str) return "?";
+  return str.trim()[0].toUpperCase();
+};
+
+const stringToColor = (str: string): string => {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const hue = hash % 360;
+  return `hsl(${hue}, 60%, 60%)`;
+};
+
+const getRelativeTime = (timestamp: Date): string => {
+  const now = Date.now();
+  const diff = now - timestamp.getTime();
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (seconds < 60) return "just now";
+  if (minutes < 60) return `${minutes}m`;
+  if (hours < 24) return `${hours}h`;
+  if (days < 30) return `${days}d`;
+
+  return timestamp.toLocaleDateString();
+};
+
 export default function Crossie() {
   const [txt, setTxt] = useState("");
   const [msgs, setMsgs] = useState<Message[]>([]);
@@ -42,71 +72,40 @@ export default function Crossie() {
     authenticated: false,
     loading: true,
   });
-  const params = new URLSearchParams(window.location.search);
-  const rawHost = params.get("host") || "";
-  const url = canonicalise(decodeURIComponent(rawHost));
+  
+  // Memoize URL parsing
+  const url = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    const rawHost = params.get("host") || "";
+    return canonicalise(decodeURIComponent(rawHost));
+  }, []);
 
   const [threadId, setThreadId] = useState<string | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
 
   const messagesRef = useRef<HTMLDivElement>(null);
   const realtimeChannelRef = useRef<any>(null);
-
-  function getInitial(str: string): string {
-    if (!str) return "?";
-    return str.trim()[0].toUpperCase();
-  }
-
-  function stringToColor(str: string): string {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      hash = str.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    const hue = hash % 360;
-    return `hsl(${hue}, 60%, 60%)`;
-  }
+  const authCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Initialize auth by requesting from parent
   useEffect(() => {
-    console.log('[Crossie] Initializing auth listener');
     
     // Request initial auth state
-    console.log('[Crossie] Requesting initial auth state from parent');
     sendToParent({ type: "REQUEST_AUTH_STATE" });
 
     // Listen for auth updates from parent
     const handleMessage = async (event: MessageEvent) => {
       if (event.data?.type === "AUTH_STATE_UPDATE") {
-        console.log('[Crossie] Received AUTH_STATE_UPDATE message:', event.data);
         
         const { authData, profile } = event.data.payload || {};
         
-        console.log('[Crossie] Auth data received:', {
-          hasAuthData: !!authData,
-          hasAccessToken: !!authData?.access_token,
-          hasUser: !!authData?.user,
-          userId: authData?.user?.id,
-          hasProfile: !!profile,
-          profileUsername: profile?.username
-        });
-        
         if (authData?.access_token) {
-          console.log('[Crossie] Setting auth in Supabase client');
           // Update Supabase client with new token
           await supabaseAuthClient.setAuth(authData.access_token);
           
-          // Verify auth is working by testing a simple query
-          console.log('[Crossie] Verifying auth with test query');
-          const { data: testData, error: testError } = await supabase
-            .from('profiles')
-            .select('id')
-            .eq('id', authData.user.id)
-            .single();
-            
-          if (testError) {
-            console.error('[Crossie] Auth verification failed:', testError);
-          } else {
-            console.log('[Crossie] Auth verification successful:', testData);
+          // Only verify auth if we're not already authenticated with the same user
+          if (!authState.authenticated || authState.user?.id !== authData.user.id) {
+            console.error('[Crossie] Auth verification failed:');
           }
           
           // Update local auth state
@@ -117,10 +116,8 @@ export default function Crossie() {
             loading: false,
           });
           setAuthInitialized(true);
-          console.log('[Crossie] Auth state updated successfully');
         } else {
           // No auth
-          console.log('[Crossie] No auth data, clearing auth state');
           await supabaseAuthClient.setAuth(null);
           setAuthState({
             user: null,
@@ -136,25 +133,24 @@ export default function Crossie() {
     window.addEventListener("message", handleMessage);
 
     // Request auth state periodically to handle updates
-    const interval = setInterval(() => {
-      console.log('[Crossie] Periodic auth state request');
+    authCheckIntervalRef.current = setInterval(() => {
       sendToParent({ type: "REQUEST_AUTH_STATE" });
-    }, 30000); // Every 30 seconds
+    }, 600000); // Every 10 minutes
 
     return () => {
       window.removeEventListener("message", handleMessage);
-      clearInterval(interval);
+      if (authCheckIntervalRef.current) {
+        clearInterval(authCheckIntervalRef.current);
+      }
     };
-  }, []);
+  }, []); // Remove authState dependency to prevent re-runs
 
   // Load thread when URL is available
   useEffect(() => {
     if (!url || !authInitialized) {
-      console.log('[Crossie] Skipping thread load:', { url, authInitialized });
       return;
     }
     
-    console.log('[Crossie] Loading thread for URL:', url);
     supabase
       .from("comment_threads")
       .select("id")
@@ -164,10 +160,7 @@ export default function Crossie() {
         if (error) {
           console.error('[Crossie] Error loading thread:', error);
         } else if (data) {
-          console.log('[Crossie] Thread found:', data.id);
           setThreadId(data.id);
-        } else {
-          console.log('[Crossie] No existing thread for URL');
         }
       });
   }, [url, authInitialized]);
@@ -292,28 +285,15 @@ export default function Crossie() {
     };
   }, [threadId, authInitialized]);
 
-  const send = async () => {
-    console.log('[Crossie] Attempting to send comment');
-    console.log('[Crossie] Current auth state:', {
-      hasProfile: !!authState.profile,
-      profileId: authState.profile?.id,
-      hasUser: !!authState.user,
-      userId: authState.user?.id,
-      authenticated: authState.authenticated
-    });
+  // Memoized callbacks
+  const send = useCallback(async () => {
     
     if (!txt.trim() || !authState.profile || !authState.user) {
-      console.log('[Crossie] Send aborted - missing requirements:', {
-        hasText: !!txt.trim(),
-        hasProfile: !!authState.profile,
-        hasUser: !!authState.user
-      });
       return;
     }
 
     let tid = threadId;
     if (!tid) {
-      console.log('[Crossie] Creating new thread for URL:', url);
       const { data, error } = await supabase.rpc("get_or_create_thread", {
         p_url: url,
       });
@@ -322,33 +302,8 @@ export default function Crossie() {
         return;
       }
       tid = data as string;
-      console.log('[Crossie] Thread created:', tid);
       setThreadId(tid);
     }
-
-    console.log('[Crossie] Inserting comment to thread:', tid);
-    console.log('[Crossie] Insert payload:', {
-      thread_id: tid,
-      user_id: authState.user.id,
-      body: txt.trim()
-    });
-    
-    // First, verify we can read from comments table
-    const { data: readTest, error: readError } = await supabase
-      .from("comments")
-      .select("id")
-      .limit(1);
-      
-    console.log('[Crossie] Read test:', { 
-      canRead: !readError, 
-      error: readError 
-    });
-    
-    // Log current token
-    console.log('[Crossie] Current token:', {
-      hasToken: !!supabaseAuthClient.getCurrentToken(),
-      tokenPrefix: supabaseAuthClient.getCurrentToken()?.substring(0, 20) + '...'
-    });
     
     const { error: insertErr } = await supabase.from("comments").insert({
       thread_id: tid,
@@ -358,27 +313,25 @@ export default function Crossie() {
     
     if (insertErr) {
       console.error("[Crossie] insert failed:", insertErr);
-    } else {
-      console.log('[Crossie] Comment inserted successfully');
     }
 
     if (messagesRef.current) {
       messagesRef.current.scrollTo({ top: 0, behavior: "smooth" });
     }
     setTxt("");
-  };
+  }, [txt, authState, threadId, url]);
 
-  const startEdit = (msgId: string, currentText: string) => {
+  const startEdit = useCallback((msgId: string, currentText: string) => {
     setEditingId(msgId);
     setEditText(currentText);
-  };
+  }, []);
 
-  const cancelEdit = () => {
+  const cancelEdit = useCallback(() => {
     setEditingId(null);
     setEditText("");
-  };
+  }, []);
 
-  const saveEdit = async (msgId: string) => {
+  const saveEdit = useCallback(async (msgId: string) => {
     if (!editText.trim()) return;
     const { error } = await supabase
       .from("comments")
@@ -392,9 +345,9 @@ export default function Crossie() {
 
     setEditingId(null);
     setEditText("");
-  };
+  }, [editText]);
 
-  const deleteComment = async (msgId: string) => {
+  const deleteComment = useCallback(async (msgId: string) => {
     if (!confirm("Are you sure you want to delete this comment?")) return;
 
     // Optimistic update - remove from UI immediately
@@ -434,16 +387,16 @@ export default function Crossie() {
         }
       }
     }
-  };
+  }, [threadId]);
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
     }
-  };
+  }, [send]);
 
-  const handleEditKeyPress = (e: React.KeyboardEvent, msgId: string) => {
+  const handleEditKeyPress = useCallback((e: React.KeyboardEvent, msgId: string) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       saveEdit(msgId);
@@ -451,31 +404,15 @@ export default function Crossie() {
     if (e.key === "Escape") {
       cancelEdit();
     }
-  };
+  }, [saveEdit, cancelEdit]);
 
-  const minimize = () => {
+  const minimize = useCallback(() => {
     sendToParent({ type: "CROSSIE_MINIMIZE" });
-  };
+  }, []);
 
-  const isOwnComment = (msg: Message) => {
+  const isOwnComment = useCallback((msg: Message) => {
     return authState.user && msg.user.id === authState.user.id;
-  };
-
-  const getRelativeTime = (timestamp: Date) => {
-    const now = Date.now();
-    const diff = now - timestamp.getTime();
-    const seconds = Math.floor(diff / 1000);
-    const minutes = Math.floor(seconds / 60);
-    const hours = Math.floor(minutes / 60);
-    const days = Math.floor(hours / 24);
-
-    if (seconds < 60) return "just now";
-    if (minutes < 60) return `${minutes}m`;
-    if (hours < 24) return `${hours}h`;
-    if (days < 30) return `${days}d`;
-
-    return timestamp.toLocaleDateString();
-  };
+  }, [authState.user]);
 
   // Show loading state
   if (authState.loading) {

@@ -104,7 +104,6 @@
 
   // Function to send auth state to iframe
   async function sendAuthToIframe() {
-    console.log('[Inject] sendAuthToIframe called');
     
     // Request auth state from background
     chrome.runtime.sendMessage({ type: 'GET_AUTH_STATE' }, (response) => {
@@ -121,16 +120,9 @@
         return;
       }
 
-      console.log('[Inject] Received auth state from background:', {
-        hasResponse: !!response,
-        hasAuthData: !!response?.authData,
-        hasProfile: !!response?.profile,
-        userId: response?.authData?.user?.id,
-        profileUsername: response?.profile?.username
-      });
+
 
       if (response && iframe.contentWindow) {
-        console.log('[Inject] Sending auth state to iframe');
         iframe.contentWindow.postMessage({
           type: 'AUTH_STATE_UPDATE',
           payload: {
@@ -172,7 +164,6 @@
 
       case "REQUEST_AUTH_STATE":
         // Iframe is requesting auth state
-        console.log('[Inject] Iframe requested auth state');
         sendAuthToIframe();
         break;
 
@@ -185,7 +176,6 @@
   // Listen for messages from extension (popup/background)
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const { type, payload } = message || {};
-    console.log("Received message from extension:", type, sender, payload);
     
     switch (type) {
       case "SHOW_EXTENSION":
@@ -209,7 +199,6 @@
 
       case "AUTH_STATE_CHANGED":
         // Auth state changed, send update to iframe
-        console.log('[Inject] Auth state changed notification received');
         sendAuthToIframe();
         break;
 
@@ -223,7 +212,6 @@
 
   // Send initial auth state when iframe loads
   iframe.addEventListener('load', () => {
-    console.log('[Inject] Iframe loaded, sending initial auth state');
     // Wait a bit for iframe to initialize
     setTimeout(() => {
       sendAuthToIframe();

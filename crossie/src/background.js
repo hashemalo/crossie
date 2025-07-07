@@ -37,7 +37,6 @@ async function getAuthState() {
 
 // Fetch profile from Supabase
 async function fetchProfile(userId, accessToken) {
-  console.log('[Background] fetchProfile called for user:', userId);
   
   try {
     // Get Supabase config from storage
@@ -48,7 +47,6 @@ async function fetchProfile(userId, accessToken) {
     };
 
     const url = `${config.url}/rest/v1/profiles?id=eq.${userId}&select=id,username,email`;
-    console.log('[Background] Fetching profile from:', url);
 
     const response = await fetch(url, {
       headers: {
@@ -58,14 +56,8 @@ async function fetchProfile(userId, accessToken) {
       }
     });
 
-    console.log('[Background] Profile fetch response:', {
-      status: response.status,
-      ok: response.ok
-    });
-
     if (response.ok) {
       const data = await response.json();
-      console.log('[Background] Profile data received:', data);
       if (data && data.length > 0) {
         return data[0];
       }
@@ -84,12 +76,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (type) {
     case 'GET_AUTH_STATE':
       // Get auth state for content script
-      console.log('[Background] GET_AUTH_STATE message received');
       getAuthState().then(authState => {
-        console.log('[Background] Sending auth state to content script:', {
-          hasAuthData: !!authState.authData,
-          hasProfile: !!authState.profile
-        });
         sendResponse(authState);
       });
       return true; // Keep message channel open for async response
