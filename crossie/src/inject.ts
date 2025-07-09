@@ -2,7 +2,7 @@
 (() => {
   // Create iframe element
   const iframe = document.createElement("iframe");
-  
+
   const hostUrl = encodeURIComponent(window.location.href);
   iframe.src = chrome.runtime.getURL(`frame.html?host=${hostUrl}`);
 
@@ -76,6 +76,14 @@
     iframe.style.transform = "scale(0)";
     iframe.style.opacity = "0";
 
+    // Notify iframe it's being minimized
+    iframe.contentWindow?.postMessage(
+      {
+        type: "CROSSIE_MINIMIZE",
+      },
+      "*"
+    );
+
     setTimeout(() => {
       iframe.style.display = "none";
       minimizedButton.style.display = "flex";
@@ -95,6 +103,14 @@
       minimizedButton.style.display = "none";
       iframe.style.display = "block";
 
+      // Notify iframe it's being shown
+      iframe.contentWindow?.postMessage(
+        {
+          type: "CROSSIE_SHOW",
+        },
+        "*"
+      );
+
       setTimeout(() => {
         iframe.style.transform = "scale(1)";
         iframe.style.opacity = "1";
@@ -104,32 +120,38 @@
 
   // Function to send auth state to iframe
   async function sendAuthToIframe() {
-    
     // Request auth state from background
-    chrome.runtime.sendMessage({ type: 'GET_AUTH_STATE' }, (response) => {
+    chrome.runtime.sendMessage({ type: "GET_AUTH_STATE" }, (response) => {
       if (chrome.runtime.lastError) {
-        console.error('[Inject] Error getting auth state:', chrome.runtime.lastError);
+        console.error(
+          "[Inject] Error getting auth state:",
+          chrome.runtime.lastError
+        );
         // Send empty auth state on error
-        iframe.contentWindow?.postMessage({
-          type: 'AUTH_STATE_UPDATE',
-          payload: {
-            authData: null,
-            profile: null
-          }
-        }, '*');
+        iframe.contentWindow?.postMessage(
+          {
+            type: "AUTH_STATE_UPDATE",
+            payload: {
+              authData: null,
+              profile: null,
+            },
+          },
+          "*"
+        );
         return;
       }
 
-
-
       if (response && iframe.contentWindow) {
-        iframe.contentWindow.postMessage({
-          type: 'AUTH_STATE_UPDATE',
-          payload: {
-            authData: response.authData,
-            profile: response.profile
-          }
-        }, '*');
+        iframe.contentWindow.postMessage(
+          {
+            type: "AUTH_STATE_UPDATE",
+            payload: {
+              authData: response.authData,
+              profile: response.profile,
+            },
+          },
+          "*"
+        );
       }
     });
   }
@@ -176,7 +198,7 @@
   // Listen for messages from extension (popup/background)
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const { type, payload } = message || {};
-    
+
     switch (type) {
       case "SHOW_EXTENSION":
         showExtension();
@@ -211,7 +233,7 @@
   });
 
   // Send initial auth state when iframe loads
-  iframe.addEventListener('load', () => {
+  iframe.addEventListener("load", () => {
     // Wait a bit for iframe to initialize
     setTimeout(() => {
       sendAuthToIframe();

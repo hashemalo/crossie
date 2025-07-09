@@ -188,10 +188,6 @@ chrome.runtime.onMessageExternal.addListener(
         // Store everything
         chrome.storage.local.set(storageData, () => {
           
-          // If profile data is included, log it
-          if (request.session.profile) {
-            console.log('Profile data included:', request.session.profile);
-          }
         });
       }
       

@@ -149,7 +149,6 @@ class AuthService {
   private async fetchProfile(userId: string, accessToken?: string): Promise<Profile | null> {
     try {
       const config = await this.getSupabaseConfig();
-      console.log('Supabase config:', config);
       if (!config) return null;
 
       // Try authenticated request first

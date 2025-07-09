@@ -1,8 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import {
-  type AuthState,
-  type Profile,
-} from "../shared/authService";
+import { type AuthState, type Profile } from "../shared/authService";
 import { supabase, supabaseAuthClient } from "../lib/supabaseClient";
 import { canonicalise } from "../lib/canonicalise";
 
@@ -12,6 +9,8 @@ interface Message {
   timestamp: Date;
   user: Profile;
   isEditing?: boolean;
+  isOptimistic?: boolean; // For optimistic updates
+  error?: boolean; // For failed sends
 }
 
 // Message protocol for parent window communication
@@ -72,7 +71,10 @@ export default function Crossie() {
     authenticated: false,
     loading: true,
   });
-  
+  const [sending, setSending] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
+  const [isTabActive, setIsTabActive] = useState(!document.hidden);
+
   // Memoize URL parsing
   const url = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
@@ -86,29 +88,19 @@ export default function Crossie() {
   const messagesRef = useRef<HTMLDivElement>(null);
   const realtimeChannelRef = useRef<any>(null);
   const authCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const optimisticCounterRef = useRef(0);
+  const newThreadRef = useRef(false);
 
   // Initialize auth by requesting from parent
   useEffect(() => {
-    
-    // Request initial auth state
     sendToParent({ type: "REQUEST_AUTH_STATE" });
 
-    // Listen for auth updates from parent
     const handleMessage = async (event: MessageEvent) => {
       if (event.data?.type === "AUTH_STATE_UPDATE") {
-        
         const { authData, profile } = event.data.payload || {};
-        
+
         if (authData?.access_token) {
-          // Update Supabase client with new token
           await supabaseAuthClient.setAuth(authData.access_token);
-          
-          // Only verify auth if we're not already authenticated with the same user
-          if (!authState.authenticated || authState.user?.id !== authData.user.id) {
-            console.error('[Crossie] Auth verification failed:');
-          }
-          
-          // Update local auth state
           setAuthState({
             user: authData.user,
             profile: profile,
@@ -117,7 +109,6 @@ export default function Crossie() {
           });
           setAuthInitialized(true);
         } else {
-          // No auth
           await supabaseAuthClient.setAuth(null);
           setAuthState({
             user: null,
@@ -128,14 +119,20 @@ export default function Crossie() {
           setAuthInitialized(true);
         }
       }
+
+      if (event.data?.type === "CROSSIE_SHOW") {
+        setIsVisible(true);
+        if (!document.hidden) {
+          sendToParent({ type: "REQUEST_AUTH_STATE" });
+        }
+      }
+
+      if (event.data?.type === "CROSSIE_MINIMIZE") {
+        setIsVisible(false);
+      }
     };
 
     window.addEventListener("message", handleMessage);
-
-    // Request auth state periodically to handle updates
-    authCheckIntervalRef.current = setInterval(() => {
-      sendToParent({ type: "REQUEST_AUTH_STATE" });
-    }, 600000); // Every 10 minutes
 
     return () => {
       window.removeEventListener("message", handleMessage);
@@ -143,14 +140,49 @@ export default function Crossie() {
         clearInterval(authCheckIntervalRef.current);
       }
     };
-  }, []); // Remove authState dependency to prevent re-runs
+  }, []);
 
-  // Load thread when URL is available
+  // Handle tab visibility changes
   useEffect(() => {
-    if (!url || !authInitialized) {
-      return;
+    const handleVisibilityChange = () => {
+      const isActive = !document.hidden;
+      setIsTabActive(isActive);
+
+      if (isActive && isVisible) {
+        sendToParent({ type: "REQUEST_AUTH_STATE" });
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () =>
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [isVisible]);
+
+  // Manage periodic auth check interval
+  useEffect(() => {
+    if (authCheckIntervalRef.current) {
+      clearInterval(authCheckIntervalRef.current);
+      authCheckIntervalRef.current = null;
     }
-    
+
+    if (isVisible && isTabActive) {
+      authCheckIntervalRef.current = setInterval(() => {
+        sendToParent({ type: "REQUEST_AUTH_STATE" });
+      }, 600000); // Every 10 minutes
+    }
+
+    return () => {
+      if (authCheckIntervalRef.current) {
+        clearInterval(authCheckIntervalRef.current);
+        authCheckIntervalRef.current = null;
+      }
+    };
+  }, [isVisible, isTabActive]);
+
+  // Load existing thread when URL is available
+  useEffect(() => {
+    if (!url || !authInitialized) return;
+
     supabase
       .from("comment_threads")
       .select("id")
@@ -158,63 +190,29 @@ export default function Crossie() {
       .maybeSingle()
       .then(({ data, error }) => {
         if (error) {
-          console.error('[Crossie] Error loading thread:', error);
+          console.error("[Crossie] Error loading thread:", error);
         } else if (data) {
           setThreadId(data.id);
         }
       });
   }, [url, authInitialized]);
 
-  // Set up realtime subscriptions
-  useEffect(() => {
-    if (!threadId || !authInitialized) return;
-
+  // Set up realtime subscription for a specific thread
+  const setupRealtimeSubscription = useCallback((tid: string) => {
     // Clean up previous channel if exists
     if (realtimeChannelRef.current) {
       supabase.removeChannel(realtimeChannelRef.current);
     }
 
-    // Fetch existing comments with joined profile info
-    supabase
-      .from("comments")
-      .select(
-        `
-          id, body, created_at, user_id,
-          user:profiles ( id, username )
-        `
-      )
-      .eq("thread_id", threadId)
-      .order("created_at", { ascending: false })
-      .then(({ data, error }) => {
-        if (error) {
-          console.error("Error fetching comments:", error);
-          return;
-        }
-
-        if (data) {
-          const mapped = data.map((c: any) => ({
-            id: c.id,
-            text: c.body,
-            timestamp: new Date(c.created_at),
-            user: {
-              id: c.user.id,
-              username: c.user.username,
-            },
-          }));
-          setMsgs(mapped);
-        }
-      });
-
-    // Realtime subscription
     const channel = supabase
-      .channel(`comments-thread-${threadId}`)
+      .channel(`comments-thread-${tid}`)
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
           table: "comments",
-          filter: `thread_id=eq.${threadId}`,
+          filter: `thread_id=eq.${tid}`,
         },
         async ({ new: comment }) => {
           if (!comment) return;
@@ -226,18 +224,37 @@ export default function Crossie() {
             .eq("id", comment.user_id)
             .single();
 
-          setMsgs((cur) => [
-            {
-              id: comment.id,
-              text: comment.body,
-              timestamp: new Date(comment.created_at),
-              user: profileData || {
-                id: comment.user_id,
-                username: "Anonymous",
-              },
+          const newMessage: Message = {
+            id: comment.id,
+            text: comment.body,
+            timestamp: new Date(comment.created_at),
+            user: profileData || {
+              id: comment.user_id,
+              username: "Anonymous",
             },
-            ...cur,
-          ]);
+          };
+
+          setMsgs((cur) => {
+            // Remove matching optimistic message and add real message
+            const filtered = cur.filter((msg) => {
+              if (!msg.isOptimistic) return true;
+
+              return !(
+                msg.text === comment.body &&
+                msg.user.id === comment.user_id &&
+                Math.abs(
+                  msg.timestamp.getTime() -
+                    new Date(comment.created_at).getTime()
+                ) < 30000
+              );
+            });
+
+            // Add new message if not already exists
+            if (!filtered.find((msg) => msg.id === comment.id)) {
+              return [newMessage, ...filtered];
+            }
+            return filtered;
+          });
         }
       )
       .on(
@@ -246,11 +263,10 @@ export default function Crossie() {
           event: "UPDATE",
           schema: "public",
           table: "comments",
-          filter: `thread_id=eq.${threadId}`,
+          filter: `thread_id=eq.${tid}`,
         },
         ({ new: comment }) => {
           if (!comment) return;
-
           setMsgs((cur) =>
             cur.map((msg) =>
               msg.id === comment.id ? { ...msg, text: comment.body } : msg
@@ -264,62 +280,185 @@ export default function Crossie() {
           event: "DELETE",
           schema: "public",
           table: "comments",
-          filter: `thread_id=eq.${threadId}`,
+          filter: `thread_id=eq.${tid}`,
         },
         (payload) => {
           const { old: comment } = payload;
           if (!comment) return;
-
           setMsgs((cur) => cur.filter((msg) => msg.id !== comment.id));
         }
       )
       .subscribe();
 
     realtimeChannelRef.current = channel;
+    return channel;
+  }, []);
+
+  // Set up subscriptions and fetch existing comments when thread is available
+  useEffect(() => {
+    if (!threadId || !authInitialized) {
+      return;
+    }
+
+    // Only fetch existing comments if this is NOT a new thread
+    if (!newThreadRef.current) {
+      // This is an existing thread, so fetch comments and set up subscription
+      supabase
+        .from("comments")
+        .select(
+          `
+          id, body, created_at, user_id,
+          user:profiles ( id, username )
+        `
+        )
+        .eq("thread_id", threadId)
+        .order("created_at", { ascending: false })
+        .then(({ data, error }) => {
+          if (error) {
+            console.error("Error fetching comments:", error);
+            return;
+          }
+
+          if (data) {
+            const mapped = data.map((c: any) => ({
+              id: c.id,
+              text: c.body,
+              timestamp: new Date(c.created_at),
+              user: {
+                id: c.user.id,
+                username: c.user.username,
+              },
+            }));
+
+            // Preserve optimistic messages when setting fetched messages
+            setMsgs((current) => {
+              const optimisticMessages = current.filter(
+                (msg) => msg.isOptimistic
+              );
+              return [...optimisticMessages, ...mapped];
+            });
+          }
+        });
+
+      // Set up realtime subscription for existing threads
+      setupRealtimeSubscription(threadId);
+    } else {
+      // Reset the flag
+      newThreadRef.current = false;
+    }
 
     return () => {
-      if (realtimeChannelRef.current) {
+      // Only clean up if this wasn't a new thread (new threads already have subscription set up)
+      if (realtimeChannelRef.current && !newThreadRef.current) {
         supabase.removeChannel(realtimeChannelRef.current);
         realtimeChannelRef.current = null;
       }
     };
-  }, [threadId, authInitialized]);
+  }, [threadId, authInitialized, setupRealtimeSubscription]);
 
-  // Memoized callbacks
+  // Send message with optimistic updates
   const send = useCallback(async () => {
-    
-    if (!txt.trim() || !authState.profile || !authState.user) {
+    if (!txt.trim() || !authState.profile || !authState.user || sending) {
       return;
     }
 
-    let tid = threadId;
-    if (!tid) {
-      const { data, error } = await supabase.rpc("get_or_create_thread", {
-        p_url: url,
-      });
-      if (error) {
-        console.error("[Crossie] couldn't make thread:", error);
-        return;
-      }
-      tid = data as string;
-      setThreadId(tid);
-    }
-    
-    const { error: insertErr } = await supabase.from("comments").insert({
-      thread_id: tid,
-      user_id: authState.user.id,
-      body: txt.trim(),
-    });
-    
-    if (insertErr) {
-      console.error("[Crossie] insert failed:", insertErr);
-    }
+    setSending(true);
 
-    if (messagesRef.current) {
-      messagesRef.current.scrollTo({ top: 0, behavior: "smooth" });
-    }
+    // Create optimistic message
+    const optimisticId = `optimistic-${Date.now()}-${++optimisticCounterRef.current}`;
+    const optimisticMessage: Message = {
+      id: optimisticId,
+      text: txt.trim(),
+      timestamp: new Date(),
+      user: authState.profile,
+      isOptimistic: true,
+    };
+
+    // Add optimistic message to UI immediately
+    setMsgs((cur) => [optimisticMessage, ...cur]);
+
+    // Clear input immediately for better UX
+    const messageText = txt.trim();
     setTxt("");
-  }, [txt, authState, threadId, url]);
+
+    try {
+      let tid = threadId;
+
+      // Create thread if it doesn't exist
+      if (!tid) {
+        const { data, error } = await supabase.rpc("get_or_create_thread", {
+          p_url: url,
+        });
+
+        if (error) {
+          throw new Error(`Couldn't create thread: ${error.message}`);
+        }
+
+        tid = data as string;
+
+        // For new threads: Set up subscription BEFORE inserting message
+        setupRealtimeSubscription(tid);
+
+        // Wait a moment for subscription to be ready
+        await new Promise((resolve) => setTimeout(resolve, 200));
+
+        // Mark as new thread and set threadId (but don't fetch existing comments)
+        newThreadRef.current = true;
+        setThreadId(tid);
+      }
+
+      // Insert the message
+      const { error: insertErr } = await supabase.from("comments").insert({
+        thread_id: tid,
+        user_id: authState.user.id,
+        body: messageText,
+      });
+
+      if (insertErr) {
+        throw new Error(`Insert failed: ${insertErr.message}`);
+      }
+
+      // Scroll to top
+      if (messagesRef.current) {
+        messagesRef.current.scrollTo({ top: 0, behavior: "smooth" });
+      }
+    } catch (error) {
+      console.error("[Crossie] Send failed:", error);
+
+      // Mark optimistic message as failed
+      setMsgs((cur) =>
+        cur.map((msg) =>
+          msg.id === optimisticId
+            ? { ...msg, error: true, isOptimistic: false }
+            : msg
+        )
+      );
+
+      // Show error to user
+      let errorMsg = "Failed to send message";
+      if (error && typeof error === "object" && "message" in error) {
+        errorMsg = `Failed to send message: ${
+          (error as { message: string }).message
+        }`;
+      }
+      alert(errorMsg);
+    } finally {
+      setSending(false);
+    }
+  }, [txt, authState, threadId, url, sending, setupRealtimeSubscription]);
+
+  // Retry failed message
+  const retryMessage = useCallback(
+    async (failedMsg: Message) => {
+      if (sending) return;
+
+      setMsgs((cur) => cur.filter((msg) => msg.id !== failedMsg.id));
+      setTxt(failedMsg.text);
+
+      setTimeout(() => send(), 100);
+    },
+    [sending, send]
+  );
 
   const startEdit = useCallback((msgId: string, currentText: string) => {
     setEditingId(msgId);
@@ -331,88 +470,101 @@ export default function Crossie() {
     setEditText("");
   }, []);
 
-  const saveEdit = useCallback(async (msgId: string) => {
-    if (!editText.trim()) return;
-    const { error } = await supabase
-      .from("comments")
-      .update({ body: editText.trim() })
-      .eq("id", msgId)
+  const saveEdit = useCallback(
+    async (msgId: string) => {
+      if (!editText.trim()) return;
 
-    if (error) {
-      console.error("Edit failed:", error);
-      return;
-    }
+      const { error } = await supabase
+        .from("comments")
+        .update({ body: editText.trim() })
+        .eq("id", msgId);
 
-    setEditingId(null);
-    setEditText("");
-  }, [editText]);
+      if (error) {
+        console.error("Edit failed:", error);
+        return;
+      }
 
-  const deleteComment = useCallback(async (msgId: string) => {
-    if (!confirm("Are you sure you want to delete this comment?")) return;
+      setEditingId(null);
+      setEditText("");
+    },
+    [editText]
+  );
 
-    // Optimistic update - remove from UI immediately
-    setMsgs((cur) => cur.filter((msg) => msg.id !== msgId));
+  const deleteComment = useCallback(
+    async (msgId: string) => {
+      if (!confirm("Are you sure you want to delete this comment?")) return;
 
-    const { error } = await supabase
-      .from("comments")
-      .delete()
-      .eq("id", msgId)
+      // Optimistic update - remove from UI immediately
+      setMsgs((cur) => cur.filter((msg) => msg.id !== msgId));
 
-    if (error) {
-      console.error("Delete failed:", error);
-      // Revert optimistic update on error - refetch messages
-      if (threadId) {
-        const { data } = await supabase
-          .from("comments")
-          .select(
-            `
-          id, body, created_at, user_id,
-          user:profiles ( id, username )
-        `
-          )
-          .eq("thread_id", threadId)
-          .order("created_at", { ascending: false });
+      const { error } = await supabase
+        .from("comments")
+        .delete()
+        .eq("id", msgId);
 
-        if (data) {
-          const mapped = data.map((c: any) => ({
-            id: c.id,
-            text: c.body,
-            timestamp: new Date(c.created_at),
-            user: {
-              id: c.user.id,
-              username: c.user.username,
-            },
-          }));
-          setMsgs(mapped);
+      if (error) {
+        console.error("Delete failed:", error);
+        // Revert optimistic update on error
+        if (threadId) {
+          const { data } = await supabase
+            .from("comments")
+            .select(
+              `
+            id, body, created_at, user_id,
+            user:profiles ( id, username )
+          `
+            )
+            .eq("thread_id", threadId)
+            .order("created_at", { ascending: false });
+
+          if (data) {
+            const mapped = data.map((c: any) => ({
+              id: c.id,
+              text: c.body,
+              timestamp: new Date(c.created_at),
+              user: { id: c.user.id, username: c.user.username },
+            }));
+            setMsgs(mapped);
+          }
         }
       }
-    }
-  }, [threadId]);
+    },
+    [threadId]
+  );
 
-  const handleKeyPress = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
-  }, [send]);
+  const handleKeyPress = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        send();
+      }
+    },
+    [send]
+  );
 
-  const handleEditKeyPress = useCallback((e: React.KeyboardEvent, msgId: string) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      saveEdit(msgId);
-    }
-    if (e.key === "Escape") {
-      cancelEdit();
-    }
-  }, [saveEdit, cancelEdit]);
+  const handleEditKeyPress = useCallback(
+    (e: React.KeyboardEvent, msgId: string) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        saveEdit(msgId);
+      }
+      if (e.key === "Escape") {
+        cancelEdit();
+      }
+    },
+    [saveEdit, cancelEdit]
+  );
 
   const minimize = useCallback(() => {
     sendToParent({ type: "CROSSIE_MINIMIZE" });
   }, []);
 
-  const isOwnComment = useCallback((msg: Message) => {
-    return authState.user && msg.user.id === authState.user.id;
-  }, [authState.user]);
+  const isOwnComment = useCallback(
+    (msg: Message) => {
+      return authState.user && msg.user.id === authState.user.id;
+    },
+    [authState.user]
+  );
 
   // Show loading state
   if (authState.loading) {
@@ -505,24 +657,22 @@ export default function Crossie() {
     <div className="relative select-none">
       <header className="bg-slate-800 rounded-t-xl px-4 py-2 text-white font-semibold flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2">
-            <div
-              className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
-              style={{
-                backgroundColor: stringToColor(
-                  authState.profile.username || authState.profile.email || ""
-                ),
-              }}
-              title={authState.profile.username}
-            >
-              {getInitial(
+          <div
+            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
+            style={{
+              backgroundColor: stringToColor(
                 authState.profile.username || authState.profile.email || ""
-              )}
-            </div>
-            <span className="text-xs text-slate-300">
-              {authState.profile.username}
-            </span>
+              ),
+            }}
+            title={authState.profile.username}
+          >
+            {getInitial(
+              authState.profile.username || authState.profile.email || ""
+            )}
           </div>
+          <span className="text-xs text-slate-300">
+            {authState.profile.username}
+          </span>
         </div>
         <div className="flex items-center space-x-3">
           <div className="flex items-center space-x-2">
@@ -555,6 +705,7 @@ export default function Crossie() {
           </button>
         </div>
       </header>
+
       <section className="bg-slate-900 text-white p-4 space-y-3 rounded-b-xl border-t border-slate-700">
         {/* Messages area */}
         <div ref={messagesRef} className="max-h-40 overflow-y-auto space-y-2">
@@ -564,7 +715,12 @@ export default function Crossie() {
             </p>
           ) : (
             msgs.map((msg) => (
-              <div key={msg.id} className="bg-slate-800 p-3 rounded-lg">
+              <div
+                key={msg.id}
+                className={`bg-slate-800 p-3 rounded-lg ${
+                  msg.isOptimistic ? "opacity-70" : ""
+                } ${msg.error ? "border border-red-500" : ""}`}
+              >
                 <div className="flex items-start gap-2">
                   <div
                     className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
@@ -583,9 +739,20 @@ export default function Crossie() {
                         {msg.user.username}
                       </span>
                       <span className="text-xs text-slate-400">
-                        {getRelativeTime(msg.timestamp)}
+                        {msg.isOptimistic
+                          ? "sending..."
+                          : getRelativeTime(msg.timestamp)}
                       </span>
-                      {isOwnComment(msg) && (
+                      {msg.error && (
+                        <span
+                          onClick={() => retryMessage(msg)}
+                          className="text-xs text-red-400 hover:text-red-300 hover:underline transition-colors cursor-pointer"
+                          title="Click to retry"
+                        >
+                          ⟲ retry
+                        </span>
+                      )}
+                      {isOwnComment(msg) && !msg.isOptimistic && !msg.error && (
                         <div className="flex gap-2 ml-auto">
                           <span
                             onClick={() => startEdit(msg.id, msg.text)}
@@ -648,15 +815,16 @@ export default function Crossie() {
             rows={2}
             className="w-full bg-slate-800 text-white p-3 rounded-lg resize-none placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
             placeholder="Type your message..."
+            disabled={sending}
           />
 
           <div className="flex space-x-2">
             <button
               onClick={send}
-              disabled={!txt.trim()}
+              disabled={!txt.trim() || sending}
               className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-400 py-2 px-4 rounded-lg text-white font-medium transition-colors"
             >
-              Send
+              {sending ? "Sending..." : "Send"}
             </button>
           </div>
         </div>
