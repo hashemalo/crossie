@@ -46,7 +46,7 @@ export default function AuthForm() {
       {/* Logo */}
       <div className="text-center mb-8">
         <h1 className="text-4xl font-bold text-blue-400 mb-2">Crossie</h1>
-        <p className="text-slate-400">Sign in to enable comments everywhere</p>
+        <p className="text-slate-400">Sign in to enable annotations everywhere</p>
       </div>
 
       {/* Error Message */}

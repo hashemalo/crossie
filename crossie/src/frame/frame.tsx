@@ -5,44 +5,23 @@ import '../index.css';
 
 const App = () => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const isVisible = useRef(false);
 
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    // Observe size changes and notify parent
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        
-        // Send resize message to parent window
-        window.parent.postMessage(
-          {
-            type: 'CROSSIE_RESIZE',
-            payload: {
-              width: Math.ceil(width),
-              height: Math.ceil(height),
-            }
-          },
-          '*'
-        );
-      }
-    });
-
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
-
-  // Listen for messages from parent (if needed in the future)
+  // Listen for messages from parent to track visibility
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       // Only handle messages from parent window
       if (event.source !== window.parent) return;
 
-      const { type  } = event.data || {};
+      const { type } = event.data || {};
 
       switch (type) {
-        // Add any frame-specific message handlers here
+        case 'CROSSIE_SHOW':
+          isVisible.current = true;
+          break;
+        case 'CROSSIE_MINIMIZE':
+          isVisible.current = false;
+          break;
         default:
           break;
       }
@@ -53,7 +32,7 @@ const App = () => {
   }, []);
 
   return (
-    <div ref={containerRef} className="w-full h-full">
+    <div ref={containerRef} className="w-full h-full flex flex-col">
       <Crossie />
     </div>
   );

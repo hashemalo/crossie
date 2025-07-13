@@ -3,7 +3,7 @@ import { type AuthState, type Profile } from "../shared/authService";
 import { supabase, supabaseAuthClient } from "../lib/supabaseClient";
 import { canonicalise } from "../lib/canonicalise";
 
-interface Message {
+interface Annotation {
   id: string;
   text: string;
   timestamp: Date;
@@ -11,6 +11,8 @@ interface Message {
   isEditing?: boolean;
   isOptimistic?: boolean; // For optimistic updates
   error?: boolean; // For failed sends
+  highlightedText?: string; // For text annotations
+  isTextAnnotation?: boolean; // Distinguish text annotations from regular comments
 }
 
 // Message protocol for parent window communication
@@ -21,7 +23,10 @@ interface ParentMessage {
     | "CROSSIE_SHOW"
     | "OPEN_AUTH_POPUP"
     | "REQUEST_AUTH_STATE"
-    | "AUTH_STATE_UPDATE";
+    | "AUTH_STATE_UPDATE"
+    | "ANNOTATION_REQUEST"
+    | "TEXT_SELECTION"
+    | "HIGHLIGHT_TEXT";
   payload?: any;
 }
 
@@ -62,7 +67,7 @@ const getRelativeTime = (timestamp: Date): string => {
 
 export default function Crossie() {
   const [txt, setTxt] = useState("");
-  const [msgs, setMsgs] = useState<Message[]>([]);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [authState, setAuthState] = useState<AuthState>({
@@ -74,6 +79,10 @@ export default function Crossie() {
   const [sending, setSending] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
   const [isTabActive, setIsTabActive] = useState(!document.hidden);
+  const [textAnnotationRequest, setTextAnnotationRequest] = useState<{
+    selectedText: string;
+    originalText: string;
+  } | null>(null);
 
   // Memoize URL parsing
   const url = useMemo(() => {
@@ -85,7 +94,7 @@ export default function Crossie() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
 
-  const messagesRef = useRef<HTMLDivElement>(null);
+  const annotationsRef = useRef<HTMLDivElement>(null);
   const realtimeChannelRef = useRef<any>(null);
   const authCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const optimisticCounterRef = useRef(0);
@@ -129,6 +138,20 @@ export default function Crossie() {
 
       if (event.data?.type === "CROSSIE_MINIMIZE") {
         setIsVisible(false);
+      }
+
+      if (event.data?.type === "ANNOTATION_REQUEST") {
+        const { selectedText, originalText } = event.data.payload || {};
+        setTextAnnotationRequest({ selectedText, originalText });
+        // Pre-fill the textarea with the selected text context
+        setTxt(`Annotation for: "${selectedText}"\n\n`);
+      }
+
+      if (event.data?.type === "TEXT_SELECTION") {
+        const { selectedText, originalText } = event.data.payload || {};
+        setTextAnnotationRequest({ selectedText, originalText });
+        // Pre-fill the textarea with the selected text context
+        setTxt(`Annotation for: "${selectedText}"\n\n`);
       }
     };
 
@@ -205,7 +228,7 @@ export default function Crossie() {
     }
 
     const channel = supabase
-      .channel(`comments-thread-${tid}`)
+      .channel(`annotations-thread-${tid}`)
       .on(
         "postgres_changes",
         {
@@ -217,41 +240,47 @@ export default function Crossie() {
         async ({ new: comment }) => {
           if (!comment) return;
 
-          // Fetch the user profile for the new comment
+          // Fetch the user profile for the new annotation
           const { data: profileData } = await supabase
             .from("profiles")
             .select("id, username")
             .eq("id", comment.user_id)
             .single();
 
-          const newMessage: Message = {
+          // Parse text annotations
+          const body = comment.body;
+          const textAnnotationMatch = body.match(/\[TEXT_ANNOTATION\](.*?)\[END_TEXT\](.*)/s);
+          
+          const newAnnotation: Annotation = {
             id: comment.id,
-            text: comment.body,
+            text: textAnnotationMatch ? textAnnotationMatch[2] : body,
             timestamp: new Date(comment.created_at),
             user: profileData || {
               id: comment.user_id,
               username: "Anonymous",
             },
+            highlightedText: textAnnotationMatch ? textAnnotationMatch[1] : undefined,
+            isTextAnnotation: !!textAnnotationMatch,
           };
 
-          setMsgs((cur) => {
-            // Remove matching optimistic message and add real message
-            const filtered = cur.filter((msg) => {
-              if (!msg.isOptimistic) return true;
+          setAnnotations((cur) => {
+            // Remove matching optimistic annotation and add real annotation
+            const filtered = cur.filter((ann) => {
+              if (!ann.isOptimistic) return true;
 
               return !(
-                msg.text === comment.body &&
-                msg.user.id === comment.user_id &&
+                ann.text === comment.body &&
+                ann.user.id === comment.user_id &&
                 Math.abs(
-                  msg.timestamp.getTime() -
+                  ann.timestamp.getTime() -
                     new Date(comment.created_at).getTime()
                 ) < 30000
               );
             });
 
-            // Add new message if not already exists
-            if (!filtered.find((msg) => msg.id === comment.id)) {
-              return [newMessage, ...filtered];
+            // Add new annotation if not already exists
+            if (!filtered.find((ann) => ann.id === comment.id)) {
+              return [newAnnotation, ...filtered];
             }
             return filtered;
           });
@@ -267,9 +296,9 @@ export default function Crossie() {
         },
         ({ new: comment }) => {
           if (!comment) return;
-          setMsgs((cur) =>
-            cur.map((msg) =>
-              msg.id === comment.id ? { ...msg, text: comment.body } : msg
+          setAnnotations((cur) =>
+            cur.map((ann) =>
+              ann.id === comment.id ? { ...ann, text: comment.body } : ann
             )
           );
         }
@@ -285,7 +314,7 @@ export default function Crossie() {
         (payload) => {
           const { old: comment } = payload;
           if (!comment) return;
-          setMsgs((cur) => cur.filter((msg) => msg.id !== comment.id));
+          setAnnotations((cur) => cur.filter((ann) => ann.id !== comment.id));
         }
       )
       .subscribe();
@@ -294,15 +323,23 @@ export default function Crossie() {
     return channel;
   }, []);
 
-  // Set up subscriptions and fetch existing comments when thread is available
+  // Function to highlight text on the page
+  const highlightTextOnPage = useCallback((text: string) => {
+    sendToParent({
+      type: "HIGHLIGHT_TEXT",
+      payload: { text },
+    });
+  }, []);
+
+  // Set up subscriptions and fetch existing annotations when thread is available
   useEffect(() => {
     if (!threadId || !authInitialized) {
       return;
     }
 
-    // Only fetch existing comments if this is NOT a new thread
+    // Only fetch existing annotations if this is NOT a new thread
     if (!newThreadRef.current) {
-      // This is an existing thread, so fetch comments and set up subscription
+      // This is an existing thread, so fetch annotations and set up subscription
       supabase
         .from("comments")
         .select(
@@ -315,27 +352,50 @@ export default function Crossie() {
         .order("created_at", { ascending: false })
         .then(({ data, error }) => {
           if (error) {
-            console.error("Error fetching comments:", error);
+            console.error("Error fetching annotations:", error);
             return;
           }
 
           if (data) {
-            const mapped = data.map((c: any) => ({
-              id: c.id,
-              text: c.body,
-              timestamp: new Date(c.created_at),
-              user: {
-                id: c.user.id,
-                username: c.user.username,
-              },
-            }));
+            const mapped = data.map((c: any) => {
+              // Parse text annotations
+              const body = c.body;
+              const textAnnotationMatch = body.match(/\[TEXT_ANNOTATION\](.*?)\[END_TEXT\](.*)/s);
+              
+              if (textAnnotationMatch) {
+                // This is a text annotation
+                return {
+                  id: c.id,
+                  text: textAnnotationMatch[2], // The annotation text
+                  timestamp: new Date(c.created_at),
+                  user: {
+                    id: c.user.id,
+                    username: c.user.username,
+                  },
+                  highlightedText: textAnnotationMatch[1], // The highlighted text
+                  isTextAnnotation: true,
+                };
+              } else {
+                // This is a regular annotation
+                return {
+                  id: c.id,
+                  text: body,
+                  timestamp: new Date(c.created_at),
+                  user: {
+                    id: c.user.id,
+                    username: c.user.username,
+                  },
+                  isTextAnnotation: false,
+                };
+              }
+            });
 
-            // Preserve optimistic messages when setting fetched messages
-            setMsgs((current) => {
-              const optimisticMessages = current.filter(
-                (msg) => msg.isOptimistic
+            // Preserve optimistic annotations when setting fetched annotations
+            setAnnotations((current) => {
+              const optimisticAnnotations = current.filter(
+                (ann) => ann.isOptimistic
               );
-              return [...optimisticMessages, ...mapped];
+              return [...optimisticAnnotations, ...mapped];
             });
           }
         });
@@ -356,7 +416,7 @@ export default function Crossie() {
     };
   }, [threadId, authInitialized, setupRealtimeSubscription]);
 
-  // Send message with optimistic updates
+  // Send annotation with optimistic updates
   const send = useCallback(async () => {
     if (!txt.trim() || !authState.profile || !authState.user || sending) {
       return;
@@ -364,22 +424,33 @@ export default function Crossie() {
 
     setSending(true);
 
-    // Create optimistic message
+    // Check if this is a text annotation
+    const isTextAnnotation = !!textAnnotationRequest;
+    const highlightedText = textAnnotationRequest?.selectedText;
+
+    // Create optimistic annotation
     const optimisticId = `optimistic-${Date.now()}-${++optimisticCounterRef.current}`;
-    const optimisticMessage: Message = {
+    const optimisticAnnotation: Annotation = {
       id: optimisticId,
       text: txt.trim(),
       timestamp: new Date(),
       user: authState.profile,
       isOptimistic: true,
+      highlightedText: highlightedText,
+      isTextAnnotation: isTextAnnotation,
     };
 
-    // Add optimistic message to UI immediately
-    setMsgs((cur) => [optimisticMessage, ...cur]);
+    // Add optimistic annotation to UI immediately
+    setAnnotations((cur) => [optimisticAnnotation, ...cur]);
 
     // Clear input immediately for better UX
-    const messageText = txt.trim();
+    const annotationText = txt.trim();
     setTxt("");
+    
+    // Clear text annotation request after sending
+    if (isTextAnnotation) {
+      setTextAnnotationRequest(null);
+    }
 
     try {
       let tid = threadId;
@@ -396,22 +467,24 @@ export default function Crossie() {
 
         tid = data as string;
 
-        // For new threads: Set up subscription BEFORE inserting message
+        // For new threads: Set up subscription BEFORE inserting annotation
         setupRealtimeSubscription(tid);
 
         // Wait a moment for subscription to be ready
         await new Promise((resolve) => setTimeout(resolve, 200));
 
-        // Mark as new thread and set threadId (but don't fetch existing comments)
+        // Mark as new thread and set threadId (but don't fetch existing annotations)
         newThreadRef.current = true;
         setThreadId(tid);
       }
 
-      // Insert the message
+      // Insert the annotation
       const { error: insertErr } = await supabase.from("comments").insert({
         thread_id: tid,
         user_id: authState.user.id,
-        body: messageText,
+        body: isTextAnnotation 
+          ? `[TEXT_ANNOTATION]${highlightedText}[END_TEXT]${annotationText}`
+          : annotationText,
       });
 
       if (insertErr) {
@@ -419,25 +492,25 @@ export default function Crossie() {
       }
 
       // Scroll to top
-      if (messagesRef.current) {
-        messagesRef.current.scrollTo({ top: 0, behavior: "smooth" });
+      if (annotationsRef.current) {
+        annotationsRef.current.scrollTo({ top: 0, behavior: "smooth" });
       }
     } catch (error) {
       console.error("[Crossie] Send failed:", error);
 
-      // Mark optimistic message as failed
-      setMsgs((cur) =>
-        cur.map((msg) =>
-          msg.id === optimisticId
-            ? { ...msg, error: true, isOptimistic: false }
-            : msg
+      // Mark optimistic annotation as failed
+      setAnnotations((cur) =>
+        cur.map((ann) =>
+          ann.id === optimisticId
+            ? { ...ann, error: true, isOptimistic: false }
+            : ann
         )
       );
 
       // Show error to user
-      let errorMsg = "Failed to send message";
+      let errorMsg = "Failed to send annotation";
       if (error && typeof error === "object" && "message" in error) {
-        errorMsg = `Failed to send message: ${
+        errorMsg = `Failed to send annotation: ${
           (error as { message: string }).message
         }`;
       }
@@ -447,21 +520,21 @@ export default function Crossie() {
     }
   }, [txt, authState, threadId, url, sending, setupRealtimeSubscription]);
 
-  // Retry failed message
-  const retryMessage = useCallback(
-    async (failedMsg: Message) => {
+  // Retry failed annotation
+  const retryAnnotation = useCallback(
+    async (failedAnnotation: Annotation) => {
       if (sending) return;
 
-      setMsgs((cur) => cur.filter((msg) => msg.id !== failedMsg.id));
-      setTxt(failedMsg.text);
+      setAnnotations((cur) => cur.filter((ann) => ann.id !== failedAnnotation.id));
+      setTxt(failedAnnotation.text);
 
       setTimeout(() => send(), 100);
     },
     [sending, send]
   );
 
-  const startEdit = useCallback((msgId: string, currentText: string) => {
-    setEditingId(msgId);
+  const startEdit = useCallback((annId: string, currentText: string) => {
+    setEditingId(annId);
     setEditText(currentText);
   }, []);
 
@@ -471,13 +544,13 @@ export default function Crossie() {
   }, []);
 
   const saveEdit = useCallback(
-    async (msgId: string) => {
+    async (annId: string) => {
       if (!editText.trim()) return;
 
       const { error } = await supabase
         .from("comments")
         .update({ body: editText.trim() })
-        .eq("id", msgId);
+        .eq("id", annId);
 
       if (error) {
         console.error("Edit failed:", error);
@@ -490,17 +563,17 @@ export default function Crossie() {
     [editText]
   );
 
-  const deleteComment = useCallback(
-    async (msgId: string) => {
-      if (!confirm("Are you sure you want to delete this comment?")) return;
+  const deleteAnnotation = useCallback(
+    async (annId: string) => {
+      if (!confirm("Are you sure you want to delete this annotation?")) return;
 
       // Optimistic update - remove from UI immediately
-      setMsgs((cur) => cur.filter((msg) => msg.id !== msgId));
+      setAnnotations((cur) => cur.filter((ann) => ann.id !== annId));
 
       const { error } = await supabase
         .from("comments")
         .delete()
-        .eq("id", msgId);
+        .eq("id", annId);
 
       if (error) {
         console.error("Delete failed:", error);
@@ -524,7 +597,7 @@ export default function Crossie() {
               timestamp: new Date(c.created_at),
               user: { id: c.user.id, username: c.user.username },
             }));
-            setMsgs(mapped);
+            setAnnotations(mapped);
           }
         }
       }
@@ -543,10 +616,10 @@ export default function Crossie() {
   );
 
   const handleEditKeyPress = useCallback(
-    (e: React.KeyboardEvent, msgId: string) => {
+    (e: React.KeyboardEvent, annId: string) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        saveEdit(msgId);
+        saveEdit(annId);
       }
       if (e.key === "Escape") {
         cancelEdit();
@@ -555,13 +628,11 @@ export default function Crossie() {
     [saveEdit, cancelEdit]
   );
 
-  const minimize = useCallback(() => {
-    sendToParent({ type: "CROSSIE_MINIMIZE" });
-  }, []);
 
-  const isOwnComment = useCallback(
-    (msg: Message) => {
-      return authState.user && msg.user.id === authState.user.id;
+
+  const isOwnAnnotation = useCallback(
+    (ann: Annotation) => {
+      return authState.user && ann.user.id === authState.user.id;
     },
     [authState.user]
   );
@@ -569,66 +640,45 @@ export default function Crossie() {
   // Show loading state
   if (authState.loading) {
     return (
-      <div className="relative select-none">
-        <header className="bg-slate-800 rounded-t-xl px-4 py-2 text-white font-semibold flex items-center justify-between">
-          <span>Crossie</span>
-          <button
-            onClick={minimize}
-            className="hover:bg-slate-700 rounded p-1 transition-colors"
-            title="Minimize"
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
-              <path d="M5 12h14" />
-            </svg>
-          </button>
-        </header>
-
-        <section className="bg-slate-900 text-white p-6 rounded-b-xl border-t border-slate-700 text-center">
-          <div className="mb-4">
-            <div className="animate-spin w-8 h-8 border-2 border-white border-t-transparent rounded-full mx-auto mb-3"></div>
-            <h3 className="text-lg font-semibold mb-2">Loading...</h3>
-            <p className="text-slate-400 text-sm">
-              Checking authentication status
-            </p>
-          </div>
-        </section>
+      <div className="w-full h-full bg-slate-900 text-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin w-12 h-12 border-4 border-white border-t-transparent rounded-full mx-auto mb-4"></div>
+          <p>Loading...</p>
+        </div>
       </div>
     );
   }
 
-  // Show sign-in prompt if no profile exists
-  if (!authState.profile) {
+  // Show sign-in prompt if not authenticated
+  if (!authState.authenticated) {
     return (
-      <div className="relative select-none">
-        <header className="bg-slate-800 rounded-t-xl px-4 py-2 text-white font-semibold flex items-center justify-between">
-          <span>Crossie</span>
-          <button
-            onClick={minimize}
-            className="hover:bg-slate-700 rounded p-1 transition-colors"
-            title="Minimize"
-          >
-            <svg
-              width="20"
-              height="20"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
+      <div className="w-full h-full bg-slate-900 text-white flex flex-col">
+        <header className="bg-slate-800 px-4 py-3 text-white font-semibold flex items-center justify-between border-b border-slate-700">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-slate-300">Crossie</span>
+          </div>
+          <div className="flex items-center space-x-3">
+            {/* Close button */}
+            <button
+              onClick={() => sendToParent({ type: "CROSSIE_MINIMIZE" })}
+              className="hover:bg-slate-700 rounded p-1 transition-colors"
+              title="Close"
             >
-              <path d="M5 12h14" />
-            </svg>
-          </button>
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </header>
-
-        <section className="bg-slate-900 text-white p-6 rounded-b-xl border-t border-slate-700 text-center">
-          <div className="mb-4">
+        <div className="flex-1 flex items-center justify-center p-6">
+          <div className="text-center">
             <svg
               width="48"
               height="48"
@@ -643,35 +693,35 @@ export default function Crossie() {
             </svg>
             <h3 className="text-lg font-semibold mb-2">Welcome to Crossie</h3>
             <p className="text-slate-400 text-sm mb-4">
-              Open the extension and sign in to start commenting and connecting
+              Open the extension and sign in to start annotating and connecting
               with others on any website.
             </p>
           </div>
-        </section>
+        </div>
       </div>
     );
   }
 
   // Show main interface if profile exists
   return (
-    <div className="relative select-none">
-      <header className="bg-slate-800 rounded-t-xl px-4 py-2 text-white font-semibold flex items-center justify-between">
+    <div className="relative select-none h-full flex flex-col">
+      <header className="bg-slate-800 px-4 py-3 text-white font-semibold flex items-center justify-between border-b border-slate-700">
         <div className="flex items-center gap-2">
           <div
             className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
             style={{
               backgroundColor: stringToColor(
-                authState.profile.username || authState.profile.email || ""
+                authState.profile?.username || authState.profile?.email || ""
               ),
             }}
-            title={authState.profile.username}
+            title={authState.profile?.username}
           >
             {getInitial(
-              authState.profile.username || authState.profile.email || ""
+              authState.profile?.username || authState.profile?.email || ""
             )}
           </div>
-          <span className="text-xs text-slate-300">
-            {authState.profile.username}
+          <span className="text-sm text-slate-300">
+            {authState.profile?.username}
           </span>
         </div>
         <div className="flex items-center space-x-3">
@@ -680,89 +730,108 @@ export default function Crossie() {
               className="w-3 h-3 bg-green-400 rounded-full animate-pulse"
               title="Online"
             ></div>
-            {msgs.length > 0 && (
+            {annotations.length > 0 && (
               <span className="text-xs bg-blue-600 px-2 py-1 rounded-full">
-                {msgs.length}
+                {annotations.length}
               </span>
             )}
           </div>
-
+          
+          {/* Close button */}
           <button
-            onClick={minimize}
+            onClick={() => sendToParent({ type: "CROSSIE_MINIMIZE" })}
             className="hover:bg-slate-700 rounded p-1 transition-colors"
-            title="Minimize"
+            title="Close"
           >
             <svg
-              width="20"
-              height="20"
+              width="16"
+              height="16"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
               strokeWidth="2"
             >
-              <path d="M5 12h14" />
+              <path d="M18 6L6 18M6 6l12 12" />
             </svg>
           </button>
         </div>
       </header>
 
-      <section className="bg-slate-900 text-white p-4 space-y-3 rounded-b-xl border-t border-slate-700">
-        {/* Messages area */}
-        <div ref={messagesRef} className="max-h-40 overflow-y-auto space-y-2">
-          {msgs.length === 0 ? (
-            <p className="text-slate-400 text-sm italic">
-              No messages yet. Start a conversation!
-            </p>
+      <section className="flex-1 bg-slate-900 text-white flex flex-col min-h-0">
+        {/* Annotations area */}
+        <div ref={annotationsRef} className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+          {annotations.length === 0 ? (
+            <div className="flex items-center justify-center h-full min-h-0 -mt-4">
+              <div className="text-center">
+                <svg
+                  width="48"
+                  height="48"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  className="mx-auto mb-3 text-slate-400"
+                >
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+                  <path d="M8 10h.01"/>
+                  <path d="M12 10h.01"/>
+                  <path d="M16 10h.01"/>
+                </svg>
+                <p className="text-slate-400 text-sm italic">
+                  No annotations yet. Start annotating this page!
+                </p>
+              </div>
+            </div>
           ) : (
-            msgs.map((msg) => (
+            annotations.map((ann) => (
               <div
-                key={msg.id}
+                key={ann.id}
                 className={`bg-slate-800 p-3 rounded-lg ${
-                  msg.isOptimistic ? "opacity-70" : ""
-                } ${msg.error ? "border border-red-500" : ""}`}
+                  ann.isOptimistic ? "opacity-70" : ""
+                } ${ann.error ? "border border-red-500" : ""}`}
               >
                 <div className="flex items-start gap-2">
                   <div
                     className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
                     style={{
                       backgroundColor: stringToColor(
-                        msg.user.username || msg.user.email || ""
+                        ann.user.username || ann.user.email || ""
                       ),
                     }}
-                    title={msg.user.username}
+                    title={ann.user.username}
                   >
-                    {getInitial(msg.user.username || msg.user.email || "")}
+                    {getInitial(ann.user.username || ann.user.email || "")}
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-xs font-medium text-blue-400">
-                        {msg.user.username}
+                        {ann.user.username}
                       </span>
                       <span className="text-xs text-slate-400">
-                        {msg.isOptimistic
+                        {ann.isOptimistic
                           ? "sending..."
-                          : getRelativeTime(msg.timestamp)}
+                          : getRelativeTime(ann.timestamp)}
                       </span>
-                      {msg.error && (
+                      {ann.error && (
                         <span
-                          onClick={() => retryMessage(msg)}
+                          onClick={() => retryAnnotation(ann)}
                           className="text-xs text-red-400 hover:text-red-300 hover:underline transition-colors cursor-pointer"
                           title="Click to retry"
                         >
                           ⟲ retry
                         </span>
                       )}
-                      {isOwnComment(msg) && !msg.isOptimistic && !msg.error && (
+                      {isOwnAnnotation(ann) && !ann.isOptimistic && !ann.error && (
                         <div className="flex gap-2 ml-auto">
                           <span
-                            onClick={() => startEdit(msg.id, msg.text)}
+                            onClick={() => startEdit(ann.id, ann.text)}
                             className="text-xs text-slate-400 hover:text-slate-300 hover:underline transition-colors cursor-pointer"
                             title="Edit"
                           >
                             ✎
                           </span>
                           <span
-                            onClick={() => deleteComment(msg.id)}
+                            onClick={() => deleteAnnotation(ann.id)}
                             className="text-xs text-slate-400 hover:text-slate-300 hover:underline transition-colors cursor-pointer"
                             title="Delete"
                           >
@@ -771,19 +840,19 @@ export default function Crossie() {
                         </div>
                       )}
                     </div>
-                    {editingId === msg.id ? (
+                    {editingId === ann.id ? (
                       <div className="space-y-2">
                         <textarea
                           value={editText}
                           onChange={(e) => setEditText(e.target.value)}
-                          onKeyDown={(e) => handleEditKeyPress(e, msg.id)}
+                          onKeyDown={(e) => handleEditKeyPress(e, ann.id)}
                           className="w-full bg-slate-700 text-white p-2 rounded text-sm resize-none focus:outline-none focus:ring-1 focus:ring-blue-500"
                           rows={2}
                           autoFocus
                         />
                         <div className="flex gap-2">
                           <button
-                            onClick={() => saveEdit(msg.id)}
+                            onClick={() => saveEdit(ann.id)}
                             className="text-xs bg-blue-600 hover:bg-blue-500 px-2 py-1 rounded transition-colors"
                           >
                             Save
@@ -797,7 +866,14 @@ export default function Crossie() {
                         </div>
                       </div>
                     ) : (
-                      <p className="text-sm break-all">{msg.text}</p>
+                      <div className="space-y-2">
+                        {ann.isTextAnnotation && ann.highlightedText && (
+                          <div className="bg-yellow-200 text-black px-2 py-1 rounded text-xs font-medium">
+                            "{ann.highlightedText}"
+                          </div>
+                        )}
+                        <p className="text-sm break-all">{ann.text}</p>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -807,14 +883,20 @@ export default function Crossie() {
         </div>
 
         {/* Input area */}
-        <div className="space-y-2">
+        <div className="p-4 border-t border-slate-700 space-y-2 flex-shrink-0">
+          {textAnnotationRequest && (
+            <div className="bg-yellow-200 text-black px-3 py-2 rounded text-sm mb-2">
+              <div className="font-medium mb-1">Annotating selected text:</div>
+              <div className="italic">"{textAnnotationRequest.selectedText}"</div>
+            </div>
+          )}
           <textarea
             value={txt}
             onChange={(e) => setTxt(e.target.value)}
             onKeyDown={handleKeyPress}
-            rows={2}
+            rows={3}
             className="w-full bg-slate-800 text-white p-3 rounded-lg resize-none placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder="Type your message..."
+            placeholder={textAnnotationRequest ? "Add your annotation..." : "Add an annotation..."}
             disabled={sending}
           />
 
@@ -824,7 +906,7 @@ export default function Crossie() {
               disabled={!txt.trim() || sending}
               className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-400 py-2 px-4 rounded-lg text-white font-medium transition-colors"
             >
-              {sending ? "Sending..." : "Send"}
+              {sending ? "Sending..." : (textAnnotationRequest ? "Add Text Annotation" : "Add Annotation")}
             </button>
           </div>
         </div>

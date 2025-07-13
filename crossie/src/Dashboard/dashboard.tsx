@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { authService, type AuthState } from "../shared/authService";
 
-interface Comment {
+interface Annotation {
   id: string;
   body: string;
   created_at: string;
@@ -13,7 +13,7 @@ interface Comment {
 }
 
 export default function Dashboard() {
-  const [comments, setComments] = useState<Comment[]>([]);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [authState, setAuthState] = useState<AuthState>({
@@ -31,9 +31,9 @@ export default function Dashboard() {
     return unsubscribe;
   }, []);
 
-  // Fetch user's comments
+  // Fetch user's annotations
   useEffect(() => {
-    const fetchComments = async () => {
+    const fetchAnnotations = async () => {
       if (!authState.user?.id) return;
 
       try {
@@ -53,10 +53,10 @@ export default function Dashboard() {
           .order("created_at", { ascending: false });
 
         if (error) throw error;
-        setComments(
-          (data || []).map((comment: any) => ({
-            ...comment,
-            thread: Array.isArray(comment.thread) ? comment.thread[0] : comment.thread,
+        setAnnotations(
+          (data || []).map((annotation: any) => ({
+            ...annotation,
+            thread: Array.isArray(annotation.thread) ? annotation.thread[0] : annotation.thread,
           }))
         );
       } catch (error: any) {
@@ -67,7 +67,7 @@ export default function Dashboard() {
     };
 
     if (authState.authenticated && !authState.loading) {
-      fetchComments();
+      fetchAnnotations();
     }
   }, [authState.authenticated, authState.loading, authState.user?.id]);
 
@@ -100,7 +100,7 @@ export default function Dashboard() {
     }
   };
 
-  const truncateComment = (text: string, maxLength: number = 150) => {
+  const truncateAnnotation = (text: string, maxLength: number = 150) => {
     if (text.length <= maxLength) return text;
     return text.substring(0, maxLength) + "...";
   };
@@ -114,48 +114,41 @@ export default function Dashboard() {
     );
   }
 
-  return (
-    <div className="w-full max-w-2xl mx-auto bg-slate-900 text-white min-h-screen">
-      {/* Header */}
-      <div className="border-b border-slate-700 p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-blue-400 mb-1">Dashboard</h1>
-            <p className="text-slate-400 text-sm">
-              Welcome back, {authState.profile?.username}
-            </p>
-          </div>
+  if (!authState.authenticated) {
+    return (
+      <div className="w-full max-w-4xl mx-auto p-6 bg-slate-900 text-white">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold mb-4">Welcome to Crossie</h1>
+          <p className="text-slate-400 mb-6">
+            Sign in to view your annotations across the web
+          </p>
           <button
-            onClick={handleSignOut}
-            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors text-sm font-medium"
+            onClick={() => window.open("/auth", "_blank")}
+            className="bg-blue-600 hover:bg-blue-500 text-white py-2 px-6 rounded-lg font-medium transition-colors"
           >
-            Sign Out
+            Sign In
           </button>
         </div>
       </div>
+    );
+  }
 
-      {/* Error Message */}
-      {error && (
-        <div className="m-6 bg-red-500/20 border border-red-500 text-red-300 px-4 py-3 rounded-lg">
-          {error}
-        </div>
-      )}
-
-      {/* Content */}
+  return (
+    <div className="w-full max-w-4xl mx-auto bg-slate-900 text-white min-h-screen">
       <div className="p-6">
         <div className="mb-6">
-          <h2 className="text-xl font-semibold mb-2">Your Comments</h2>
+          <h2 className="text-xl font-semibold mb-2">Your Annotations</h2>
           <p className="text-slate-400 text-sm">
-            {comments.length} comment{comments.length !== 1 ? "s" : ""} across the web
+            {annotations.length} annotation{annotations.length !== 1 ? "s" : ""} across the web
           </p>
         </div>
 
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <div className="animate-spin w-8 h-8 border-4 border-blue-400 border-t-transparent rounded-full"></div>
-            <span className="ml-3 text-slate-400">Loading your comments...</span>
+            <span className="ml-3 text-slate-400">Loading your annotations...</span>
           </div>
-        ) : comments.length === 0 ? (
+        ) : annotations.length === 0 ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 bg-slate-700 rounded-full mx-auto mb-4 flex items-center justify-center">
               <svg
@@ -172,9 +165,9 @@ export default function Dashboard() {
                 />
               </svg>
             </div>
-            <h3 className="text-lg font-medium mb-2">No comments yet</h3>
+            <h3 className="text-lg font-medium mb-2">No annotations yet</h3>
             <p className="text-slate-400 mb-4">
-              Start commenting on websites to see them here!
+              Start annotating on websites to see them here!
             </p>
             <button
               onClick={() => window.close()}
@@ -185,12 +178,12 @@ export default function Dashboard() {
           </div>
         ) : (
           <div className="space-y-4">
-            {comments.map((comment) => (
+            {annotations.map((annotation) => (
               <div
-                key={comment.id}
+                key={annotation.id}
                 className="bg-slate-800 border border-slate-700 rounded-lg p-4 hover:border-slate-600 transition-colors"
               >
-                {/* Comment Header */}
+                {/* Annotation Header */}
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center space-x-2 mb-1">
@@ -208,29 +201,29 @@ export default function Dashboard() {
                         />
                       </svg>
                       <span className="text-blue-400 text-sm font-medium truncate">
-                        {getDomainFromUrl(comment.thread.url)}
+                        {getDomainFromUrl(annotation.thread.url)}
                       </span>
                     </div>
-                    <p className="text-xs text-slate-400 truncate" title={comment.thread.url}>
-                      {comment.thread.url}
+                    <p className="text-xs text-slate-400 truncate" title={annotation.thread.url}>
+                      {annotation.thread.url}
                     </p>
                   </div>
                   <div className="text-xs text-slate-400 flex-shrink-0 ml-4">
-                    {formatDate(comment.created_at)}
+                    {formatDate(annotation.created_at)}
                   </div>
                 </div>
 
-                {/* Comment Body */}
+                {/* Annotation Body */}
                 <div className="bg-slate-700/50 rounded-lg p-3">
-                  <p className="text-sm leading-relaxed" title={comment.body}>
-                    {truncateComment(comment.body)}
+                  <p className="text-sm leading-relaxed" title={annotation.body}>
+                    {truncateAnnotation(annotation.body)}
                   </p>
                 </div>
 
                 {/* Actions */}
                 <div className="flex items-center justify-end mt-3 space-x-2">
                   <button
-                    onClick={() => window.open(comment.thread.url, "_blank")}
+                    onClick={() => window.open(annotation.thread.url, "_blank")}
                     className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
                   >
                     View Page
@@ -242,7 +235,7 @@ export default function Dashboard() {
         )}
 
         {/* Footer Actions */}
-        {comments.length > 0 && (
+        {annotations.length > 0 && (
           <div className="mt-8 pt-6 border-t border-slate-700 text-center">
             <button
               onClick={() => window.close()}
