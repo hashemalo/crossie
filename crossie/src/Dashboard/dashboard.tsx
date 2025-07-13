@@ -4,11 +4,16 @@ import { authService, type AuthState } from "../shared/authService";
 
 interface Annotation {
   id: string;
-  body: string;
+  content: string;
   created_at: string;
-  thread: {
+  project: {
+    id: string;
+    name: string;
+  };
+  page: {
     id: string;
     url: string;
+    title?: string;
   };
 }
 
@@ -39,14 +44,19 @@ export default function Dashboard() {
       try {
         setLoading(true);
         const { data, error } = await supabase
-          .from("comments")
+          .from("annotations")
           .select(`
             id,
-            body,
+            content,
             created_at,
-            thread:comment_threads (
+            project:projects (
               id,
-              url
+              name
+            ),
+            page:pages (
+              id,
+              url,
+              title
             )
           `)
           .eq("user_id", authState.user.id)
@@ -56,7 +66,8 @@ export default function Dashboard() {
         setAnnotations(
           (data || []).map((annotation: any) => ({
             ...annotation,
-            thread: Array.isArray(annotation.thread) ? annotation.thread[0] : annotation.thread,
+            project: Array.isArray(annotation.project) ? annotation.project[0] : annotation.project,
+            page: Array.isArray(annotation.page) ? annotation.page[0] : annotation.page,
           }))
         );
       } catch (error: any) {
@@ -118,7 +129,7 @@ export default function Dashboard() {
     return (
       <div className="w-full max-w-4xl mx-auto p-6 bg-slate-900 text-white">
         <div className="text-center">
-          <h1 className="text-2xl font-bold mb-4">Welcome to Crossie</h1>
+          <h1 className="text-2xl font-bold mb-4">Welcome to crossie</h1>
           <p className="text-slate-400 mb-6">
             Sign in to view your annotations across the web
           </p>
@@ -200,51 +211,47 @@ export default function Dashboard() {
                           d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"
                         />
                       </svg>
-                      <span className="text-blue-400 text-sm font-medium truncate">
-                        {getDomainFromUrl(annotation.thread.url)}
+                      <span className="text-sm text-slate-400">
+                        {getDomainFromUrl(annotation.page.url)}
+                      </span>
+                      <span className="text-xs text-slate-500">•</span>
+                      <span className="text-xs text-slate-500">
+                        {formatDate(annotation.created_at)}
                       </span>
                     </div>
-                    <p className="text-xs text-slate-400 truncate" title={annotation.thread.url}>
-                      {annotation.thread.url}
+                    <h3 className="text-sm font-medium text-white truncate">
+                      {annotation.project.name}
+                    </h3>
+                    <p className="text-xs text-slate-400 truncate">
+                      {annotation.page.title || annotation.page.url}
                     </p>
                   </div>
-                  <div className="text-xs text-slate-400 flex-shrink-0 ml-4">
-                    {formatDate(annotation.created_at)}
-                  </div>
-                </div>
-
-                {/* Annotation Body */}
-                <div className="bg-slate-700/50 rounded-lg p-3">
-                  <p className="text-sm leading-relaxed" title={annotation.body}>
-                    {truncateAnnotation(annotation.body)}
-                  </p>
-                </div>
-
-                {/* Actions */}
-                <div className="flex items-center justify-end mt-3 space-x-2">
                   <button
-                    onClick={() => window.open(annotation.thread.url, "_blank")}
+                    onClick={() => window.open(annotation.page.url, "_blank")}
                     className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
                   >
-                    View Page
+                    Visit →
                   </button>
+                </div>
+
+                {/* Annotation Content */}
+                <div className="text-sm text-slate-300 leading-relaxed">
+                  {truncateAnnotation(annotation.content)}
                 </div>
               </div>
             ))}
           </div>
         )}
 
-        {/* Footer Actions */}
-        {annotations.length > 0 && (
-          <div className="mt-8 pt-6 border-t border-slate-700 text-center">
-            <button
-              onClick={() => window.close()}
-              className="px-6 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors text-sm font-medium"
-            >
-              Close Dashboard
-            </button>
-          </div>
-        )}
+        {/* Sign Out Button */}
+        <div className="mt-8 pt-6 border-t border-slate-700">
+          <button
+            onClick={handleSignOut}
+            className="text-sm text-slate-400 hover:text-slate-300 transition-colors"
+          >
+            Sign Out
+          </button>
+        </div>
       </div>
     </div>
   );

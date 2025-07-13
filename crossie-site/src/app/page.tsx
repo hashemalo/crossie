@@ -288,7 +288,7 @@ export default function Home() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
             <div className="flex items-center">
-              <h1 className="text-xl font-semibold text-blue-400">Crossie</h1>
+              <h1 className="text-xl font-semibold text-blue-400">crossie</h1>
             </div>
             <div className="flex items-center space-x-4">
               <span className="text-sm text-slate-400">

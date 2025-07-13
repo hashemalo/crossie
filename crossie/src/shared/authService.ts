@@ -7,7 +7,7 @@ export interface User {
 }
 
 export interface Profile {
-  id: string;        // Added missing id field
+  id: string;       
   username: string;
   email?: string;
 }

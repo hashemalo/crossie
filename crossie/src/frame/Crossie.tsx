@@ -5,14 +5,33 @@ import { canonicalise } from "../lib/canonicalise";
 
 interface Annotation {
   id: string;
-  text: string;
+  content: string; // The annotation comment
   timestamp: Date;
   user: Profile;
+  annotationType: 'text' | 'image' | 'area';
+  highlightedText?: string; // For text annotations
+  imageData?: string; // For image annotations
+  coordinates?: { x: number; y: number; width: number; height: number }; // For area annotations
   isEditing?: boolean;
   isOptimistic?: boolean; // For optimistic updates
   error?: boolean; // For failed sends
-  highlightedText?: string; // For text annotations
-  isTextAnnotation?: boolean; // Distinguish text annotations from regular comments
+}
+
+interface Page {
+  id: string;
+  url: string;
+  urlHash: string;
+  title?: string;
+  createdAt: Date;
+}
+
+interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  isTeamProject: boolean;
+  createdBy: string;
+  createdAt: Date;
 }
 
 // Message protocol for parent window communication
@@ -84,6 +103,18 @@ export default function Crossie() {
     originalText: string;
   } | null>(null);
 
+  // Project management state
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [currentPage, setCurrentPage] = useState<Page | null>(null);
+  const [showProjectSelector, setShowProjectSelector] = useState(false);
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProject, setNewProject] = useState({
+    name: '',
+    description: '',
+    isTeamProject: false
+  });
+
   // Memoize URL parsing
   const url = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
@@ -91,14 +122,15 @@ export default function Crossie() {
     return canonicalise(decodeURIComponent(rawHost));
   }, []);
 
-  const [threadId, setThreadId] = useState<string | null>(null);
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [pageId, setPageId] = useState<string | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
 
   const annotationsRef = useRef<HTMLDivElement>(null);
   const realtimeChannelRef = useRef<any>(null);
   const authCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const optimisticCounterRef = useRef(0);
-  const newThreadRef = useRef(false);
+  const newProjectRef = useRef(false);
 
   // Initialize auth by requesting from parent
   useEffect(() => {
@@ -202,65 +234,261 @@ export default function Crossie() {
     };
   }, [isVisible, isTabActive]);
 
-  // Load existing thread when URL is available
+  // Load or create page when URL is available
   useEffect(() => {
     if (!url || !authInitialized) return;
 
-    supabase
-      .from("comment_threads")
-      .select("id")
-      .eq("url", url)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (error) {
-          console.error("[Crossie] Error loading thread:", error);
-        } else if (data) {
-          setThreadId(data.id);
+    const loadOrCreatePage = async () => {
+      const urlHash = btoa(url).replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
+      
+      // Try to find existing page
+      const { data: existingPage, error: pageError } = await supabase
+        .from("pages")
+        .select("id, url, url_hash, title, created_at")
+        .eq("url_hash", urlHash)
+        .maybeSingle();
+
+      if (pageError) {
+        console.error("[Crossie] Error loading page:", pageError);
+        return;
+      }
+
+      if (existingPage) {
+        const page: Page = {
+          id: existingPage.id,
+          url: existingPage.url,
+          urlHash: existingPage.url_hash,
+          title: existingPage.title,
+          createdAt: new Date(existingPage.created_at)
+        };
+        setCurrentPage(page);
+        setPageId(existingPage.id);
+      } else {
+        // Create new page
+        const { data: newPage, error: createError } = await supabase
+          .from("pages")
+          .insert({
+            url: url,
+            url_hash: urlHash,
+            title: document.title || url
+          })
+          .select("id, url, url_hash, title, created_at")
+          .single();
+
+        if (createError) {
+          console.error("[Crossie] Error creating page:", createError);
+          return;
         }
-      });
+
+        const page: Page = {
+          id: newPage.id,
+          url: newPage.url,
+          urlHash: newPage.url_hash,
+          title: newPage.title,
+          createdAt: new Date(newPage.created_at)
+        };
+        setCurrentPage(page);
+        setPageId(newPage.id);
+      }
+    };
+
+    loadOrCreatePage();
   }, [url, authInitialized]);
 
-  // Set up realtime subscription for a specific thread
-  const setupRealtimeSubscription = useCallback((tid: string) => {
+  // Fetch user's projects when authenticated
+  useEffect(() => {
+    if (!authState.authenticated || !authState.user) return;
+
+    const fetchProjects = async () => {
+      try {
+        const userId = authState.user!.id;
+        // First, get projects created by the user
+        const { data: ownedProjects, error: ownedError } = await supabase
+          .from("projects")
+          .select(`
+            id,
+            name,
+            description,
+            is_team_project,
+            created_by,
+            created_at
+          `)
+          .eq("created_by", userId);
+
+        if (ownedError) throw ownedError;
+
+        // Then, get projects where user is a member
+        const { data: memberProjects, error: memberError } = await supabase
+          .from("project_members")
+          .select(`
+            project:projects (
+              id,
+              name,
+              description,
+              is_team_project,
+              created_by,
+              created_at
+            )
+          `)
+          .eq("user_id", userId);
+
+        if (memberError) throw memberError;
+
+        // Combine and deduplicate projects
+        const allProjects = [
+          ...(ownedProjects || []),
+          ...(memberProjects || []).map((mp: any) => mp.project).filter(Boolean)
+        ];
+
+        // Remove duplicates based on project ID
+        const uniqueProjects = allProjects.filter((project, index, self) => 
+          index === self.findIndex(p => p.id === project.id)
+        );
+
+        // Sort by created_at descending
+        const sortedProjects = uniqueProjects.sort((a, b) => 
+          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
+
+        const mappedProjects = sortedProjects.map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          isTeamProject: p.is_team_project,
+          createdBy: p.created_by,
+          createdAt: new Date(p.created_at)
+        }));
+
+        setProjects(mappedProjects);
+      } catch (error) {
+        console.error("Error fetching projects:", error);
+      }
+    };
+
+    fetchProjects();
+  }, [authState.authenticated, authState.user]);
+
+  // Project management functions
+  const createProject = async () => {
+    if (!authState.user || !newProject.name) return;
+
+    try {
+      const userId = authState.user.id;
+      
+      const { data, error } = await supabase
+        .from("projects")
+        .insert({
+          name: newProject.name,
+          description: newProject.description,
+          created_by: userId,
+          is_team_project: newProject.isTeamProject
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      // Add user as project member
+      if (authState.user) {
+        await supabase
+          .from("project_members")
+          .insert({
+            project_id: data.id,
+            user_id: authState.user.id,
+            role: 'owner'
+          });
+      }
+
+      // Add current page to the new project
+      if (currentPage) {
+        await supabase
+          .from("project_pages")
+          .insert({
+            project_id: data.id,
+            page_id: currentPage.id,
+            added_by: userId
+          });
+      }
+
+      const newProjectObj: Project = {
+        id: data.id,
+        name: data.name,
+        description: data.description,
+        isTeamProject: data.is_team_project,
+        createdBy: data.created_by,
+        createdAt: new Date(data.created_at)
+      };
+
+      setProjects([newProjectObj, ...projects]);
+      setSelectedProject(newProjectObj);
+      setProjectId(data.id);
+      setShowCreateProject(false);
+      setNewProject({ name: '', description: '', isTeamProject: false });
+    } catch (error) {
+      console.error("Error creating project:", error);
+      alert("Failed to create project");
+    }
+  };
+
+  const selectProject = (project: Project) => {
+    setSelectedProject(project);
+    setProjectId(project.id);
+    setShowProjectSelector(false);
+  };
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showProjectSelector) {
+        setShowProjectSelector(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [showProjectSelector]);
+
+  // Set up realtime subscription for a specific project and page
+  const setupRealtimeSubscription = useCallback((pid: string, pageId: string) => {
     // Clean up previous channel if exists
     if (realtimeChannelRef.current) {
       supabase.removeChannel(realtimeChannelRef.current);
     }
 
     const channel = supabase
-      .channel(`annotations-thread-${tid}`)
+      .channel(`annotations-project-${pid}-page-${pageId}`)
       .on(
         "postgres_changes",
         {
           event: "INSERT",
           schema: "public",
-          table: "comments",
-          filter: `thread_id=eq.${tid}`,
+          table: "annotations",
+          filter: `project_id=eq.${pid} AND page_id=eq.${pageId}`,
         },
-        async ({ new: comment }) => {
-          if (!comment) return;
+        async ({ new: annotation }) => {
+          if (!annotation) return;
 
           // Fetch the user profile for the new annotation
           const { data: profileData } = await supabase
             .from("profiles")
             .select("id, username")
-            .eq("id", comment.user_id)
+            .eq("id", annotation.user_id)
             .single();
 
-          // Parse text annotations
-          const body = comment.body;
-          const textAnnotationMatch = body.match(/\[TEXT_ANNOTATION\](.*?)\[END_TEXT\](.*)/s);
-          
           const newAnnotation: Annotation = {
-            id: comment.id,
-            text: textAnnotationMatch ? textAnnotationMatch[2] : body,
-            timestamp: new Date(comment.created_at),
+            id: annotation.id,
+            content: annotation.content,
+            timestamp: new Date(annotation.created_at),
             user: profileData || {
-              id: comment.user_id,
+              id: annotation.user_id,
               username: "Anonymous",
             },
-            highlightedText: textAnnotationMatch ? textAnnotationMatch[1] : undefined,
-            isTextAnnotation: !!textAnnotationMatch,
+            annotationType: annotation.annotation_type,
+            highlightedText: annotation.highlighted_text,
+            imageData: annotation.image_data,
+            coordinates: annotation.coordinates,
           };
 
           setAnnotations((cur) => {
@@ -269,17 +497,17 @@ export default function Crossie() {
               if (!ann.isOptimistic) return true;
 
               return !(
-                ann.text === comment.body &&
-                ann.user.id === comment.user_id &&
+                ann.content === annotation.content &&
+                ann.user.id === annotation.user_id &&
                 Math.abs(
                   ann.timestamp.getTime() -
-                    new Date(comment.created_at).getTime()
+                    new Date(annotation.created_at).getTime()
                 ) < 30000
               );
             });
 
             // Add new annotation if not already exists
-            if (!filtered.find((ann) => ann.id === comment.id)) {
+            if (!filtered.find((ann) => ann.id === annotation.id)) {
               return [newAnnotation, ...filtered];
             }
             return filtered;
@@ -291,14 +519,14 @@ export default function Crossie() {
         {
           event: "UPDATE",
           schema: "public",
-          table: "comments",
-          filter: `thread_id=eq.${tid}`,
+          table: "annotations",
+          filter: `project_id=eq.${pid} AND page_id=eq.${pageId}`,
         },
-        ({ new: comment }) => {
-          if (!comment) return;
+        ({ new: annotation }) => {
+          if (!annotation) return;
           setAnnotations((cur) =>
             cur.map((ann) =>
-              ann.id === comment.id ? { ...ann, text: comment.body } : ann
+              ann.id === annotation.id ? { ...ann, content: annotation.content } : ann
             )
           );
         }
@@ -308,13 +536,13 @@ export default function Crossie() {
         {
           event: "DELETE",
           schema: "public",
-          table: "comments",
-          filter: `thread_id=eq.${tid}`,
+          table: "annotations",
+          filter: `project_id=eq.${pid} AND page_id=eq.${pageId}`,
         },
         (payload) => {
-          const { old: comment } = payload;
-          if (!comment) return;
-          setAnnotations((cur) => cur.filter((ann) => ann.id !== comment.id));
+          const { old: annotation } = payload;
+          if (!annotation) return;
+          setAnnotations((cur) => cur.filter((ann) => ann.id !== annotation.id));
         }
       )
       .subscribe();
@@ -331,24 +559,24 @@ export default function Crossie() {
     });
   }, []);
 
-  // Set up subscriptions and fetch existing annotations when thread is available
+  // Set up subscriptions and fetch existing annotations when project and page are available
   useEffect(() => {
-    if (!threadId || !authInitialized) {
+    if (!projectId || !pageId || !authInitialized) {
       return;
     }
 
-    // Only fetch existing annotations if this is NOT a new thread
-    if (!newThreadRef.current) {
-      // This is an existing thread, so fetch annotations and set up subscription
+    // Only fetch existing annotations if this is NOT a new project
+    if (!newProjectRef.current) {
+      // This is an existing project, so fetch annotations and set up subscription
       supabase
-        .from("comments")
-        .select(
-          `
-          id, body, created_at, user_id,
+        .from("annotations")
+        .select(`
+          id, content, created_at, user_id, annotation_type, highlighted_text, image_data, coordinates,
           user:profiles ( id, username )
         `
         )
-        .eq("thread_id", threadId)
+        .eq("project_id", projectId)
+        .eq("page_id", pageId)
         .order("created_at", { ascending: false })
         .then(({ data, error }) => {
           if (error) {
@@ -357,38 +585,19 @@ export default function Crossie() {
           }
 
           if (data) {
-            const mapped = data.map((c: any) => {
-              // Parse text annotations
-              const body = c.body;
-              const textAnnotationMatch = body.match(/\[TEXT_ANNOTATION\](.*?)\[END_TEXT\](.*)/s);
-              
-              if (textAnnotationMatch) {
-                // This is a text annotation
-                return {
-                  id: c.id,
-                  text: textAnnotationMatch[2], // The annotation text
-                  timestamp: new Date(c.created_at),
-                  user: {
-                    id: c.user.id,
-                    username: c.user.username,
-                  },
-                  highlightedText: textAnnotationMatch[1], // The highlighted text
-                  isTextAnnotation: true,
-                };
-              } else {
-                // This is a regular annotation
-                return {
-                  id: c.id,
-                  text: body,
-                  timestamp: new Date(c.created_at),
-                  user: {
-                    id: c.user.id,
-                    username: c.user.username,
-                  },
-                  isTextAnnotation: false,
-                };
-              }
-            });
+            const mapped = data.map((a: any) => ({
+              id: a.id,
+              content: a.content,
+              timestamp: new Date(a.created_at),
+              user: {
+                id: a.user.id,
+                username: a.user.username,
+              },
+              annotationType: a.annotation_type,
+              highlightedText: a.highlighted_text,
+              imageData: a.image_data,
+              coordinates: a.coordinates,
+            }));
 
             // Preserve optimistic annotations when setting fetched annotations
             setAnnotations((current) => {
@@ -400,25 +609,27 @@ export default function Crossie() {
           }
         });
 
-      // Set up realtime subscription for existing threads
-      setupRealtimeSubscription(threadId);
+      // Set up realtime subscription for existing projects
+      if (projectId && pageId) {
+        setupRealtimeSubscription(projectId, pageId);
+      }
     } else {
       // Reset the flag
-      newThreadRef.current = false;
+      newProjectRef.current = false;
     }
 
     return () => {
-      // Only clean up if this wasn't a new thread (new threads already have subscription set up)
-      if (realtimeChannelRef.current && !newThreadRef.current) {
+      // Only clean up if this wasn't a new project (new projects already have subscription set up)
+      if (realtimeChannelRef.current && !newProjectRef.current) {
         supabase.removeChannel(realtimeChannelRef.current);
         realtimeChannelRef.current = null;
       }
     };
-  }, [threadId, authInitialized, setupRealtimeSubscription]);
+  }, [projectId, pageId, authInitialized, setupRealtimeSubscription]);
 
   // Send annotation with optimistic updates
   const send = useCallback(async () => {
-    if (!txt.trim() || !authState.profile || !authState.user || sending) {
+    if (!txt.trim() || !authState.profile || !authState.user || sending || !selectedProject || !currentPage) {
       return;
     }
 
@@ -432,12 +643,12 @@ export default function Crossie() {
     const optimisticId = `optimistic-${Date.now()}-${++optimisticCounterRef.current}`;
     const optimisticAnnotation: Annotation = {
       id: optimisticId,
-      text: txt.trim(),
+      content: txt.trim(),
       timestamp: new Date(),
       user: authState.profile,
+      annotationType: isTextAnnotation ? 'text' : 'text',
       isOptimistic: true,
       highlightedText: highlightedText,
-      isTextAnnotation: isTextAnnotation,
     };
 
     // Add optimistic annotation to UI immediately
@@ -453,38 +664,32 @@ export default function Crossie() {
     }
 
     try {
-      let tid = threadId;
+      // Ensure page is added to project if not already
+      const { data: existingProjectPage } = await supabase
+        .from("project_pages")
+        .select("id")
+        .eq("project_id", selectedProject.id)
+        .eq("page_id", currentPage.id)
+        .maybeSingle();
 
-      // Create thread if it doesn't exist
-      if (!tid) {
-        const { data, error } = await supabase.rpc("get_or_create_thread", {
-          p_url: url,
-        });
-
-        if (error) {
-          throw new Error(`Couldn't create thread: ${error.message}`);
-        }
-
-        tid = data as string;
-
-        // For new threads: Set up subscription BEFORE inserting annotation
-        setupRealtimeSubscription(tid);
-
-        // Wait a moment for subscription to be ready
-        await new Promise((resolve) => setTimeout(resolve, 200));
-
-        // Mark as new thread and set threadId (but don't fetch existing annotations)
-        newThreadRef.current = true;
-        setThreadId(tid);
+      if (!existingProjectPage) {
+        await supabase
+          .from("project_pages")
+          .insert({
+            project_id: selectedProject.id,
+            page_id: currentPage.id,
+            added_by: authState.user.id
+          });
       }
 
       // Insert the annotation
-      const { error: insertErr } = await supabase.from("comments").insert({
-        thread_id: tid,
+      const { error: insertErr } = await supabase.from("annotations").insert({
+        project_id: selectedProject.id,
+        page_id: currentPage.id,
         user_id: authState.user.id,
-        body: isTextAnnotation 
-          ? `[TEXT_ANNOTATION]${highlightedText}[END_TEXT]${annotationText}`
-          : annotationText,
+        content: annotationText,
+        annotation_type: isTextAnnotation ? 'text' : 'text',
+        highlighted_text: highlightedText,
       });
 
       if (insertErr) {
@@ -518,7 +723,7 @@ export default function Crossie() {
     } finally {
       setSending(false);
     }
-  }, [txt, authState, threadId, url, sending, setupRealtimeSubscription]);
+  }, [txt, authState, selectedProject, currentPage, sending, textAnnotationRequest]);
 
   // Retry failed annotation
   const retryAnnotation = useCallback(
@@ -526,16 +731,16 @@ export default function Crossie() {
       if (sending) return;
 
       setAnnotations((cur) => cur.filter((ann) => ann.id !== failedAnnotation.id));
-      setTxt(failedAnnotation.text);
+      setTxt(failedAnnotation.content);
 
       setTimeout(() => send(), 100);
     },
     [sending, send]
   );
 
-  const startEdit = useCallback((annId: string, currentText: string) => {
+  const startEdit = useCallback((annId: string, currentContent: string) => {
     setEditingId(annId);
-    setEditText(currentText);
+    setEditText(currentContent);
   }, []);
 
   const cancelEdit = useCallback(() => {
@@ -548,8 +753,8 @@ export default function Crossie() {
       if (!editText.trim()) return;
 
       const { error } = await supabase
-        .from("comments")
-        .update({ body: editText.trim() })
+        .from("annotations")
+        .update({ content: editText.trim() })
         .eq("id", annId);
 
       if (error) {
@@ -571,38 +776,43 @@ export default function Crossie() {
       setAnnotations((cur) => cur.filter((ann) => ann.id !== annId));
 
       const { error } = await supabase
-        .from("comments")
+        .from("annotations")
         .delete()
         .eq("id", annId);
 
       if (error) {
         console.error("Delete failed:", error);
         // Revert optimistic update on error
-        if (threadId) {
+        if (projectId && pageId) {
           const { data } = await supabase
-            .from("comments")
+            .from("annotations")
             .select(
               `
-            id, body, created_at, user_id,
+            id, content, created_at, user_id, annotation_type, highlighted_text, image_data, coordinates,
             user:profiles ( id, username )
           `
             )
-            .eq("thread_id", threadId)
+            .eq("project_id", projectId)
+            .eq("page_id", pageId)
             .order("created_at", { ascending: false });
 
           if (data) {
-            const mapped = data.map((c: any) => ({
-              id: c.id,
-              text: c.body,
-              timestamp: new Date(c.created_at),
-              user: { id: c.user.id, username: c.user.username },
+            const mapped = data.map((a: any) => ({
+              id: a.id,
+              content: a.content,
+              timestamp: new Date(a.created_at),
+              user: { id: a.user.id, username: a.user.username },
+              annotationType: a.annotation_type,
+              highlightedText: a.highlighted_text,
+              imageData: a.image_data,
+              coordinates: a.coordinates,
             }));
             setAnnotations(mapped);
           }
         }
       }
     },
-    [threadId]
+    [projectId, pageId]
   );
 
   const handleKeyPress = useCallback(
@@ -627,8 +837,6 @@ export default function Crossie() {
     },
     [saveEdit, cancelEdit]
   );
-
-
 
   const isOwnAnnotation = useCallback(
     (ann: Annotation) => {
@@ -655,7 +863,7 @@ export default function Crossie() {
       <div className="w-full h-full bg-slate-900 text-white flex flex-col">
         <header className="bg-slate-800 px-4 py-3 text-white font-semibold flex items-center justify-between border-b border-slate-700">
           <div className="flex items-center gap-2">
-            <span className="text-sm text-slate-300">Crossie</span>
+            <span className="text-sm text-slate-300">crossie</span>
           </div>
           <div className="flex items-center space-x-3">
             {/* Close button */}
@@ -691,7 +899,7 @@ export default function Crossie() {
               <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
               <circle cx="12" cy="7" r="4" />
             </svg>
-            <h3 className="text-lg font-semibold mb-2">Welcome to Crossie</h3>
+            <h3 className="text-lg font-semibold mb-2">Welcome to crossie</h3>
             <p className="text-slate-400 text-sm mb-4">
               Open the extension and sign in to start annotating and connecting
               with others on any website.
@@ -720,11 +928,65 @@ export default function Crossie() {
               authState.profile?.username || authState.profile?.email || ""
             )}
           </div>
-          <span className="text-sm text-slate-300">
-            {authState.profile?.username}
-          </span>
         </div>
-        <div className="flex items-center space-x-3">
+        
+        {/* Project selector */}
+        <div className="flex items-center space-x-2">
+          <div className="relative">
+            <button
+              onClick={() => setShowProjectSelector(!showProjectSelector)}
+              className="flex items-center space-x-2 bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-sm transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              </svg>
+              <span className="text-xs">
+                {selectedProject ? selectedProject.name : 'Select Project'}
+              </span>
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            
+            {/* Project dropdown */}
+            {showProjectSelector && (
+              <div className="absolute top-full left-0 mt-1 w-64 bg-slate-700 border border-slate-600 rounded-lg shadow-lg z-10">
+                <div className="p-2">
+                  <div className="text-xs text-slate-400 mb-2 px-2">Your Projects</div>
+                  {projects.length === 0 ? (
+                    <div className="text-xs text-slate-400 px-2 py-1">No projects yet</div>
+                  ) : (
+                    <div className="space-y-1">
+                      {projects.map((project) => (
+                                                 <button
+                           key={project.id}
+                           onClick={() => selectProject(project)}
+                           className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-slate-600 transition-colors ${
+                             selectedProject?.id === project.id ? 'bg-blue-600 text-white' : 'text-slate-300'
+                           }`}
+                         >
+                           <div className="font-medium">{project.name}</div>
+                           <div className="text-slate-400 truncate">{currentPage?.url || 'Current page'}</div>
+                         </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="border-t border-slate-600 mt-2 pt-2">
+                    <button
+                      onClick={() => {
+                        setShowProjectSelector(false);
+                        setShowCreateProject(true);
+                      }}
+                      className="w-full text-left px-2 py-1 rounded text-xs text-blue-400 hover:bg-slate-600 transition-colors"
+                    >
+                      + Create New Project
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          
           <div className="flex items-center space-x-2">
             <div
               className="w-3 h-3 bg-green-400 rounded-full animate-pulse"
@@ -760,7 +1022,32 @@ export default function Crossie() {
       <section className="flex-1 bg-slate-900 text-white flex flex-col min-h-0">
         {/* Annotations area */}
         <div ref={annotationsRef} className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
-          {annotations.length === 0 ? (
+          {!selectedProject ? (
+            <div className="flex items-center justify-center h-full min-h-0 -mt-4">
+              <div className="text-center">
+                <svg
+                  width="48"
+                  height="48"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  className="mx-auto mb-3 text-slate-400"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+                <p className="text-slate-400 text-sm mb-4">
+                  Select a project to start annotating
+                </p>
+                <button
+                  onClick={() => setShowProjectSelector(true)}
+                  className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Choose Project
+                </button>
+              </div>
+            </div>
+          ) : annotations.length === 0 ? (
             <div className="flex items-center justify-center h-full min-h-0 -mt-4">
               <div className="text-center">
                 <svg
@@ -824,7 +1111,7 @@ export default function Crossie() {
                       {isOwnAnnotation(ann) && !ann.isOptimistic && !ann.error && (
                         <div className="flex gap-2 ml-auto">
                           <span
-                            onClick={() => startEdit(ann.id, ann.text)}
+                            onClick={() => startEdit(ann.id, ann.content)}
                             className="text-xs text-slate-400 hover:text-slate-300 hover:underline transition-colors cursor-pointer"
                             title="Edit"
                           >
@@ -867,12 +1154,12 @@ export default function Crossie() {
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        {ann.isTextAnnotation && ann.highlightedText && (
+                        {ann.annotationType === 'text' && ann.highlightedText && (
                           <div className="bg-yellow-200 text-black px-2 py-1 rounded text-xs font-medium">
                             "{ann.highlightedText}"
                           </div>
                         )}
-                        <p className="text-sm break-all">{ann.text}</p>
+                        <p className="text-sm break-all">{ann.content}</p>
                       </div>
                     )}
                   </div>
@@ -884,33 +1171,111 @@ export default function Crossie() {
 
         {/* Input area */}
         <div className="p-4 border-t border-slate-700 space-y-2 flex-shrink-0">
-          {textAnnotationRequest && (
-            <div className="bg-yellow-200 text-black px-3 py-2 rounded text-sm mb-2">
-              <div className="font-medium mb-1">Annotating selected text:</div>
-              <div className="italic">"{textAnnotationRequest.selectedText}"</div>
+          {!selectedProject ? (
+            <div className="text-center text-slate-400 text-sm">
+              Select a project to start annotating
             </div>
-          )}
-          <textarea
-            value={txt}
-            onChange={(e) => setTxt(e.target.value)}
-            onKeyDown={handleKeyPress}
-            rows={3}
-            className="w-full bg-slate-800 text-white p-3 rounded-lg resize-none placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            placeholder={textAnnotationRequest ? "Add your annotation..." : "Add an annotation..."}
-            disabled={sending}
-          />
+          ) : (
+            <>
+              {textAnnotationRequest && (
+                <div className="bg-yellow-200 text-black px-3 py-2 rounded text-sm mb-2">
+                  <div className="font-medium mb-1">Annotating selected text:</div>
+                  <div className="italic">"{textAnnotationRequest.selectedText}"</div>
+                </div>
+              )}
+              <textarea
+                value={txt}
+                onChange={(e) => setTxt(e.target.value)}
+                onKeyDown={handleKeyPress}
+                rows={3}
+                className="w-full bg-slate-800 text-white p-3 rounded-lg resize-none placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder={textAnnotationRequest ? "Add your annotation..." : "Add an annotation..."}
+                disabled={sending}
+              />
 
-          <div className="flex space-x-2">
-            <button
-              onClick={send}
-              disabled={!txt.trim() || sending}
-              className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-400 py-2 px-4 rounded-lg text-white font-medium transition-colors"
-            >
-              {sending ? "Sending..." : (textAnnotationRequest ? "Add Text Annotation" : "Add Annotation")}
-            </button>
-          </div>
+              <div className="flex space-x-2">
+                <button
+                  onClick={send}
+                  disabled={!txt.trim() || sending}
+                  className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-400 py-2 px-4 rounded-lg text-white font-medium transition-colors"
+                >
+                  {sending ? "Sending..." : (textAnnotationRequest ? "Add Text Annotation" : "Add Annotation")}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </section>
+
+      {/* Create Project Modal */}
+      {showCreateProject && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-800 rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold text-white mb-4">Create New Project</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Project Name
+                </label>
+                <input
+                  type="text"
+                  value={newProject.name}
+                  onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
+                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="My Website Project"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Description (Optional)
+                </label>
+                <textarea
+                  value={newProject.description}
+                  onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
+                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  rows={3}
+                  placeholder="Describe your project..."
+                />
+              </div>
+
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
+                  id="team-project"
+                  checked={newProject.isTeamProject}
+                  onChange={(e) => setNewProject({ ...newProject, isTeamProject: e.target.checked })}
+                  className="mr-2"
+                />
+                <label htmlFor="team-project" className="text-sm text-slate-300">
+                  This is a team project
+                </label>
+              </div>
+
+              <div className="text-xs text-slate-400 bg-slate-700 p-3 rounded">
+                <strong>Website:</strong> {url}
+              </div>
+            </div>
+
+            <div className="flex items-center space-x-3 mt-6">
+              <button
+                onClick={createProject}
+                disabled={!newProject.name}
+                className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 disabled:text-slate-400 text-white py-2 px-4 rounded-lg font-medium transition-colors"
+              >
+                Create Project
+              </button>
+              <button
+                onClick={() => setShowCreateProject(false)}
+                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 px-4 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

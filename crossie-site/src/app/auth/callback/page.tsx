@@ -317,7 +317,7 @@ export default function AuthCallbackPage() {
             </div>
             <h2 className="text-2xl font-bold text-white mb-2">Success!</h2>
             <p className="text-slate-400 mb-6">
-              Your Crossie extension is now connected. You can close this tab and start commenting on any website!
+              Your crossie extension is now connected.
             </p>
             <div className="flex justify-center space-x-4">
               <button
@@ -325,12 +325,6 @@ export default function AuthCallbackPage() {
                 className="bg-blue-600 hover:bg-blue-500 text-white py-2 px-6 rounded-lg font-medium transition-colors"
               >
                 Go to Dashboard
-              </button>
-              <button
-                onClick={() => window.close()}
-                className="bg-slate-600 hover:bg-slate-500 text-white py-2 px-6 rounded-lg font-medium transition-colors"
-              >
-                Close Tab
               </button>
               <button
                 onClick={handleSignOut}
