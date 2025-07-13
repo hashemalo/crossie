@@ -42,6 +42,21 @@ export default function Home() {
     is_team_project: false
   });
 
+  // Add auth state listener
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setProjects([]);
+        setLoading(false);
+      } else if (event === 'SIGNED_IN' && session?.user) {
+        checkAuth();
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
   // Check authentication on mount
   useEffect(() => {
     checkAuth();
@@ -232,6 +247,15 @@ export default function Home() {
     });
   };
 
+  const handleSignOut = async () => {
+    try {
+      await supabase.auth.signOut();
+      // The auth state listener will handle the state updates
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
@@ -244,7 +268,7 @@ export default function Home() {
     return (
       <main className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
         <div className="text-center">
-          <h1 className="text-4xl font-bold text-blue-400 mb-4">Crossie</h1>
+          <h1 className="text-4xl font-bold text-blue-400 mb-4">crossie</h1>
           <p className="text-slate-400 mb-8">Annotate everywhere on the web</p>
           <a
             href="/auth"
@@ -271,7 +295,7 @@ export default function Home() {
                 Welcome, {user.username}
               </span>
               <button
-                onClick={() => supabase.auth.signOut()}
+                onClick={handleSignOut}
                 className="text-sm text-slate-400 hover:text-slate-300 transition-colors"
               >
                 Sign Out

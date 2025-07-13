@@ -321,8 +321,14 @@ export default function AuthCallbackPage() {
             </p>
             <div className="flex justify-center space-x-4">
               <button
-                onClick={() => window.close()}
+                onClick={() => window.location.href = '/'}
                 className="bg-blue-600 hover:bg-blue-500 text-white py-2 px-6 rounded-lg font-medium transition-colors"
+              >
+                Go to Dashboard
+              </button>
+              <button
+                onClick={() => window.close()}
+                className="bg-slate-600 hover:bg-slate-500 text-white py-2 px-6 rounded-lg font-medium transition-colors"
               >
                 Close Tab
               </button>
