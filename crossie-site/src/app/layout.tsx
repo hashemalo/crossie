@@ -5,8 +5,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Crossie - Comment Everywhere",
-  description: "Enable comments on any website with Crossie",
+  title: "crossie - Comment Everywhere",
+  description: "Enable comments on any website with crossie",
 };
 
 export default function RootLayout({
