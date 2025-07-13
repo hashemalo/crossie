@@ -11,11 +11,18 @@ const supabase = createClient(
 interface Project {
   id: string;
   name: string;
-  url: string;
   description?: string;
   is_team_project: boolean;
   created_at: string;
+  page_count?: number;
   annotation_count?: number;
+}
+
+interface Page {
+  id: string;
+  url: string;
+  title?: string;
+  created_at: string;
 }
 
 interface User {
@@ -31,7 +38,6 @@ export default function Home() {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newProject, setNewProject] = useState({
     name: '',
-    url: '',
     description: '',
     is_team_project: false
   });
@@ -64,32 +70,39 @@ export default function Home() {
     try {
       // Fetch projects where user is the creator or a member
       const { data, error } = await supabase
-        .from('projects')
+        .from("projects")
         .select(`
           id,
           name,
-          url,
           description,
           is_team_project,
           created_at,
           project_members!inner(user_id)
         `)
         .or(`created_by.eq.${userId},project_members.user_id.eq.${userId}`)
-        .order('created_at', { ascending: false });
+        .order("created_at", { ascending: false });
 
       if (error) throw error;
 
-      // Also fetch annotation counts for each project
+      // Fetch page counts and annotation counts for each project
       const projectsWithCounts = await Promise.all(
         (data || []).map(async (project) => {
-          const { count } = await supabase
-            .from('annotations')
-            .select('*', { count: 'exact', head: true })
-            .eq('project_id', project.id);
+          // Get page count
+          const { count: pageCount } = await supabase
+            .from("project_pages")
+            .select("*", { count: "exact", head: true })
+            .eq("project_id", project.id);
+
+          // Get annotation count across all pages in the project
+          const { count: annotationCount } = await supabase
+            .from("annotations")
+            .select("*", { count: "exact", head: true })
+            .eq("project_id", project.id);
           
           return {
             ...project,
-            annotation_count: count || 0
+            page_count: pageCount || 0,
+            annotation_count: annotationCount || 0
           };
         })
       );
@@ -103,16 +116,14 @@ export default function Home() {
   };
 
   const createProject = async () => {
-    if (!user || !newProject.name || !newProject.url) return;
+    if (!user || !newProject.name) return;
 
     try {
       const { data, error } = await supabase
-        .from('projects')
+        .from("projects")
         .insert({
           name: newProject.name,
-          url: newProject.url,
           description: newProject.description,
-          url_hash: btoa(newProject.url).replace(/[^a-zA-Z0-9]/g, '').substring(0, 20),
           created_by: user.id,
           is_team_project: newProject.is_team_project
         })
@@ -123,16 +134,16 @@ export default function Home() {
 
       // Add user as project member
       await supabase
-        .from('project_members')
+        .from("project_members")
         .insert({
           project_id: data.id,
           user_id: user.id,
           role: 'owner'
         });
 
-      setProjects([{ ...data, annotation_count: 0 }, ...projects]);
+      setProjects([{ ...data, page_count: 0, annotation_count: 0 }, ...projects]);
       setShowCreateModal(false);
-      setNewProject({ name: '', url: '', description: '', is_team_project: false });
+      setNewProject({ name: '', description: '', is_team_project: false });
     } catch (error) {
       console.error('Error creating project:', error);
       alert('Failed to create project');
@@ -145,21 +156,27 @@ export default function Home() {
     try {
       // Delete annotations first
       await supabase
-        .from('annotations')
+        .from("annotations")
         .delete()
-        .eq('project_id', projectId);
+        .eq("project_id", projectId);
+
+      // Delete project pages
+      await supabase
+        .from("project_pages")
+        .delete()
+        .eq("project_id", projectId);
 
       // Delete project members
       await supabase
-        .from('project_members')
+        .from("project_members")
         .delete()
-        .eq('project_id', projectId);
+        .eq("project_id", projectId);
 
       // Delete project
       await supabase
-        .from('projects')
+        .from("projects")
         .delete()
-        .eq('id', projectId);
+        .eq("id", projectId);
 
       setProjects(projects.filter(p => p.id !== projectId));
     } catch (error) {
@@ -171,17 +188,17 @@ export default function Home() {
   const getDomainFromUrl = (url: string) => {
     try {
       const domain = new URL(url).hostname;
-      return domain.replace('www.', '');
+      return domain.replace("www.", "");
     } catch {
       return url;
     }
   };
 
   const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
+    return new Date(dateString).toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric"
     });
   };
 
@@ -283,7 +300,7 @@ export default function Home() {
                       {project.name}
                     </h3>
                     <p className="text-sm text-slate-400 mt-1">
-                      {getDomainFromUrl(project.url)}
+                      {project.description || 'No description'}
                     </p>
                   </div>
                   {project.is_team_project && (
@@ -293,26 +310,21 @@ export default function Home() {
                   )}
                 </div>
 
-                {project.description && (
-                  <p className="text-sm text-slate-300 mb-4 line-clamp-2">
-                    {project.description}
-                  </p>
-                )}
-
                 <div className="flex items-center justify-between text-sm text-slate-400 mb-4">
-                  <span>{project.annotation_count} annotations</span>
+                  <div className="flex items-center space-x-4">
+                    <span>{project.page_count} pages</span>
+                    <span>{project.annotation_count} annotations</span>
+                  </div>
                   <span>{formatDate(project.created_at)}</span>
                 </div>
 
                 <div className="flex items-center space-x-2">
-                  <a
-                    href={project.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    onClick={() => window.open(`/project/${project.id}`, '_blank')}
                     className="flex-1 bg-slate-700 hover:bg-slate-600 text-white text-sm py-2 px-3 rounded transition-colors text-center"
                   >
-                    Visit Site
-                  </a>
+                    View Project
+                  </button>
                   <button
                     onClick={() => deleteProject(project.id)}
                     className="text-red-400 hover:text-red-300 transition-colors p-2"
@@ -351,19 +363,6 @@ export default function Home() {
 
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Website URL
-                </label>
-                <input
-                  type="url"
-                  value={newProject.url}
-                  onChange={(e) => setNewProject({ ...newProject, url: e.target.value })}
-                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="https://example.com"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
                   Description (Optional)
                 </label>
                 <textarea
@@ -392,7 +391,7 @@ export default function Home() {
             <div className="flex items-center space-x-3 mt-6">
               <button
                 onClick={createProject}
-                disabled={!newProject.name || !newProject.url}
+                disabled={!newProject.name}
                 className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 disabled:text-slate-400 text-white py-2 px-4 rounded-lg font-medium transition-colors"
               >
                 Create Project
