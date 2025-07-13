@@ -68,21 +68,51 @@ export default function Home() {
 
   const fetchProjects = async (userId: string) => {
     try {
-      // Fetch projects where user is the creator or a member
-      const { data, error } = await supabase
+      // First, get projects created by the user
+      const { data: ownedProjects, error: ownedError } = await supabase
         .from("projects")
         .select(`
           id,
           name,
           description,
           is_team_project,
-          created_at,
-          project_members!inner(user_id)
+          created_at
         `)
-        .or(`created_by.eq.${userId},project_members.user_id.eq.${userId}`)
-        .order("created_at", { ascending: false });
+        .eq("created_by", userId);
 
-      if (error) throw error;
+      if (ownedError) throw ownedError;
+
+      // Then, get projects where user is a member
+      const { data: memberProjects, error: memberError } = await supabase
+        .from("project_members")
+        .select(`
+          project:projects (
+            id,
+            name,
+            description,
+            is_team_project,
+            created_at
+          )
+        `)
+        .eq("user_id", userId);
+
+      if (memberError) throw memberError;
+
+      // Combine and deduplicate projects
+      const allProjects = [
+        ...(ownedProjects || []),
+        ...(memberProjects || []).map((mp: any) => mp.project).filter(Boolean)
+      ];
+
+      // Remove duplicates based on project ID
+      const uniqueProjects = allProjects.filter((project, index, self) => 
+        index === self.findIndex(p => p.id === project.id)
+      );
+
+      // Sort by created_at descending
+      const data = uniqueProjects.sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
 
       // Fetch page counts and annotation counts for each project
       const projectsWithCounts = await Promise.all(
