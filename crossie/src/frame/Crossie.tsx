@@ -3,20 +3,80 @@ import { type AuthState, type Profile } from "../shared/authService";
 import { supabase, supabaseAuthClient } from "../lib/supabaseClient";
 import { canonicalise } from "../lib/canonicalise";
 
+// W3C-style Text Selectors (similar to Hypothesis)
+interface TextQuoteSelector {
+  type: "TextQuoteSelector";
+  exact: string;
+  prefix?: string;
+  suffix?: string;
+}
+
+interface TextPositionSelector {
+  type: "TextPositionSelector";
+  start: number;
+  end: number;
+}
+
+interface RangeSelector {
+  type: "RangeSelector";
+  startContainer: string;
+  startOffset: number;
+  endContainer: string;
+  endOffset: number;
+}
+
+interface XPathSelector {
+  type: "XPathSelector";
+  value: string;
+}
+
+interface CSSSelector {
+  type: "CSSSelector";
+  value: string;
+}
+
+// Enhanced text selection data interface with W3C-style selectors
+interface TextSelectionData {
+  selectedText: string;
+  // W3C-style selectors for robust anchoring
+  selectors: Array<TextQuoteSelector | TextPositionSelector | RangeSelector | XPathSelector | CSSSelector>;
+  // Enhanced fields for precise text location
+  startNodePath?: string; // Path to the start text node
+  endNodePath?: string; // Path to the end text node
+  startOffset?: number; // Offset in the start node
+  endOffset?: number; // Offset in the end node
+  parentSelector?: string; // CSS selector of the parent element
+  precedingText?: string; // Text before selection (for context)
+  followingText?: string; // Text after selection (for context)
+  rangeStartOffset?: number; // Range start offset
+  rangeEndOffset?: number; // Range end offset
+  parentTextHash?: string; // Hash of parent text content for verification
+  // Additional anchoring data
+  textContent?: string; // Full text content of the parent for context
+  documentUrl?: string; // URL of the document
+  timestamp?: number; // When the selection was made
+}
+
 interface Annotation {
   id: string;
   content: string;
   timestamp: Date;
   user: Profile;
-  annotationType: "text" | "image" | "area";
+  // Remove image and area annotation types - focus only on text
+  annotationType: "text";
   highlightedText?: string;
-  imageData?: string;
-  coordinates?: { x: number; y: number; width: number; height: number };
+  // Remove imageData and coordinates - focus only on text selection
   isEditing?: boolean;
   isOptimistic?: boolean;
   error?: boolean;
   // Add optimistic tracking ID
   optimisticId?: string;
+  // Enhanced selection data for better highlighting
+  selectionData?: TextSelectionData;
+  // Add expanded state for long content
+  isExpanded?: boolean;
+  // Add expanded state for highlighted text
+  isHighlightExpanded?: boolean;
 }
 
 interface Page {
@@ -46,7 +106,10 @@ interface ParentMessage {
     | "AUTH_STATE_UPDATE"
     | "ANNOTATION_REQUEST"
     | "TEXT_SELECTION"
-    | "HIGHLIGHT_TEXT";
+    | "HIGHLIGHT_TEXT"
+    | "HIGHLIGHT_ANNOTATIONS"
+    | "CLEAR_SELECTION"
+    | "SCROLL_TO_HIGHLIGHT";
   payload?: any;
 }
 
@@ -98,6 +161,98 @@ const getRelativeTime = (timestamp: Date): string => {
   return timestamp.toLocaleDateString();
 };
 
+// Utility function to truncate text for display
+const truncateText = (text: string, maxLength: number = 280): { text: string; isTruncated: boolean } => {
+  if (text.length <= maxLength) {
+    return { text, isTruncated: false };
+  }
+  
+  // Find the last space before maxLength to avoid cutting words
+  const lastSpace = text.lastIndexOf(' ', maxLength);
+  const cutoffPoint = lastSpace > 0 ? lastSpace : maxLength;
+  
+  return {
+    text: text.substring(0, cutoffPoint) + '...',
+    isTruncated: true
+  };
+};
+
+// Component for displaying annotation content with expand/collapse
+const AnnotationContent: React.FC<{
+  content: string;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+}> = ({ content, isExpanded, onToggleExpand }) => {
+  const { text, isTruncated } = truncateText(content);
+  
+  return (
+    <div className="space-y-1">
+      <p className="text-sm break-words whitespace-pre-wrap">
+        {isExpanded ? content : text}
+      </p>
+      {isTruncated && (
+        <button
+          onClick={onToggleExpand}
+          className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+        >
+          {isExpanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </div>
+  );
+};
+
+// Component for displaying highlighted text with expand/collapse
+const HighlightedTextContent: React.FC<{
+  highlightedText: string;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+  onScrollToHighlight: () => void;
+}> = ({ highlightedText, isExpanded, onToggleExpand, onScrollToHighlight }) => {
+  const { text, isTruncated } = truncateText(highlightedText, 500); // Shorter limit for highlights
+  
+  return (
+    <div className="space-y-2">
+      <div 
+        className="bg-yellow-200 text-black px-3 py-2 rounded-lg text-sm font-medium cursor-pointer hover:bg-yellow-300 hover:shadow-md transition-all duration-200 border border-yellow-300"
+        onClick={onScrollToHighlight}
+        title="Click to scroll to highlight on page"
+      >
+        <span className="break-words">"{isExpanded ? highlightedText : text}"</span>
+      </div>
+      {isTruncated && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleExpand();
+          }}
+          className="text-xs text-yellow-600 hover:text-yellow-500 transition-colors ml-3"
+        >
+          {isExpanded ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </div>
+  );
+};
+
+// Function to send highlight request to parent window
+const highlightTextOnPage = (annotations: Annotation[]) => {
+  // Extract all text selections that need highlighting
+  const highlights = annotations
+    .filter(ann => ann.annotationType === "text" && ann.highlightedText)
+    .map(ann => ({
+      id: ann.id,
+      text: ann.highlightedText,
+      selectionData: ann.selectionData
+    }));
+  
+  // Send to parent window to handle highlighting
+  sendToParent({
+    type: "HIGHLIGHT_ANNOTATIONS",
+    payload: { highlights }
+  });
+};
+
 export default function Crossie() {
   const [txt, setTxt] = useState("");
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -113,10 +268,7 @@ export default function Crossie() {
   const [loadingAnnotations, setLoadingAnnotations] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
   const [isTabActive, setIsTabActive] = useState(!document.hidden);
-  const [textAnnotationRequest, setTextAnnotationRequest] = useState<{
-    selectedText: string;
-    originalText: string;
-  } | null>(null);
+  const [textAnnotationRequest, setTextAnnotationRequest] = useState<TextSelectionData | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [currentPage, setCurrentPage] = useState<Page | null>(null);
@@ -139,6 +291,36 @@ export default function Crossie() {
     const params = new URLSearchParams(window.location.search);
     return canonicalise(decodeURIComponent(params.get("host") || ""));
   }, []);
+
+  // Function to handle toggling content expansion
+  const toggleAnnotationExpansion = useCallback((annotationId: string) => {
+    setAnnotations(current =>
+      current.map(ann =>
+        ann.id === annotationId
+          ? { ...ann, isExpanded: !ann.isExpanded }
+          : ann
+      )
+    );
+  }, []);
+
+  // Function to handle toggling highlighted text expansion
+  const toggleHighlightExpansion = useCallback((annotationId: string) => {
+    setAnnotations(current =>
+      current.map(ann =>
+        ann.id === annotationId
+          ? { ...ann, isHighlightExpanded: !ann.isHighlightExpanded }
+          : ann
+      )
+    );
+  }, []);
+
+  // Update useEffect to trigger highlighting when annotations change
+  useEffect(() => {
+    if (annotations.length > 0 && !annotations.some(ann => ann.isOptimistic)) {
+      // Send highlight request to parent
+      highlightTextOnPage(annotations);
+    }
+  }, [annotations]);
 
   useEffect(() => {
     sendToParent({ type: "REQUEST_AUTH_STATE" });
@@ -177,9 +359,9 @@ export default function Crossie() {
         sendToParent({ type: "REQUEST_AUTH_STATE" });
       }
       if (event.data?.type === "TEXT_SELECTION") {
-        const { selectedText, originalText } = event.data.payload || {};
-        if (selectedText && originalText) {
-          setTextAnnotationRequest({ selectedText, originalText });
+        const selectionData = event.data.payload;
+        if (selectionData && selectionData.selectedText) {
+          setTextAnnotationRequest(selectionData);
           setIsVisible(true);
         }
       }
@@ -396,8 +578,26 @@ export default function Crossie() {
           user: { id: a.user.id, username: a.user.username },
           annotationType: a.annotation_type,
           highlightedText: a.highlighted_text,
-          imageData: a.image_data,
-          coordinates: a.coordinates,
+          // Parse selection data from coordinates field
+          selectionData: a.coordinates?.type === 'text-selection' ? {
+            selectedText: a.highlighted_text || a.coordinates.selectedText || '',
+            selectors: a.coordinates.selectors || [],
+            startNodePath: a.coordinates.startNodePath,
+            endNodePath: a.coordinates.endNodePath,
+            startOffset: a.coordinates.startOffset,
+            endOffset: a.coordinates.endOffset,
+            parentSelector: a.coordinates.parentSelector,
+            precedingText: a.coordinates.precedingText,
+            followingText: a.coordinates.followingText,
+            rangeStartOffset: a.coordinates.rangeStartOffset,
+            rangeEndOffset: a.coordinates.rangeEndOffset,
+            parentTextHash: a.coordinates.parentTextHash,
+            textContent: a.coordinates.textContent,
+            documentUrl: a.coordinates.documentUrl,
+            timestamp: a.coordinates.timestamp
+          } : undefined,
+          isExpanded: false,
+          isHighlightExpanded: false
         }));
         setAnnotations(mapped);
       }
@@ -463,8 +663,26 @@ export default function Crossie() {
                     },
                     annotationType: annotation.annotation_type,
                     highlightedText: annotation.highlighted_text,
-                    imageData: annotation.image_data,
-                    coordinates: annotation.coordinates,
+                    // Parse selection data from coordinates field
+                    selectionData: annotation.coordinates?.type === 'text-selection' ? {
+                      selectedText: annotation.highlighted_text || annotation.coordinates.selectedText || '',
+                      selectors: annotation.coordinates.selectors || [],
+                      startNodePath: annotation.coordinates.startNodePath,
+                      endNodePath: annotation.coordinates.endNodePath,
+                      startOffset: annotation.coordinates.startOffset,
+                      endOffset: annotation.coordinates.endOffset,
+                      parentSelector: annotation.coordinates.parentSelector,
+                      precedingText: annotation.coordinates.precedingText,
+                      followingText: annotation.coordinates.followingText,
+                      rangeStartOffset: annotation.coordinates.rangeStartOffset,
+                      rangeEndOffset: annotation.coordinates.rangeEndOffset,
+                      parentTextHash: annotation.coordinates.parentTextHash,
+                      textContent: annotation.coordinates.textContent,
+                      documentUrl: annotation.coordinates.documentUrl,
+                      timestamp: annotation.coordinates.timestamp
+                    } : undefined,
+                    isExpanded: false,
+                    isHighlightExpanded: false
                   };
 
                   setAnnotations((cur) => {
@@ -567,17 +785,23 @@ export default function Crossie() {
     setSending(true);
     const isTextAnnotation = !!textAnnotationRequest;
     const highlightedText = textAnnotationRequest?.selectedText;
+    const selectionData = textAnnotationRequest as TextSelectionData;
+    
     const optimisticId = `optimistic-${Date.now()}-${++optimisticCounterRef.current}`;
     const optimisticAnnotation: Annotation = {
       id: optimisticId,
       content: txt.trim(),
       timestamp: new Date(),
       user: authState.profile,
-      annotationType: isTextAnnotation ? "text" : "text",
+      annotationType: "text",
       isOptimistic: true,
       highlightedText,
       optimisticId,
+      selectionData: isTextAnnotation ? selectionData : undefined,
+      isExpanded: false,
+      isHighlightExpanded: false
     };
+    
     setAnnotations((cur) => [optimisticAnnotation, ...cur]);
     const annotationText = txt.trim();
     setTxt("");
@@ -623,6 +847,26 @@ export default function Crossie() {
         });
       }
 
+      // Prepare coordinates field with enhanced selection data
+      const coordinates = isTextAnnotation && selectionData ? {
+        type: 'text-selection',
+        selectedText: selectionData.selectedText,
+        selectors: selectionData.selectors,
+        startNodePath: selectionData.startNodePath,
+        endNodePath: selectionData.endNodePath,
+        startOffset: selectionData.startOffset,
+        endOffset: selectionData.endOffset,
+        parentSelector: selectionData.parentSelector,
+        precedingText: selectionData.precedingText,
+        followingText: selectionData.followingText,
+        rangeStartOffset: selectionData.rangeStartOffset,
+        rangeEndOffset: selectionData.rangeEndOffset,
+        parentTextHash: selectionData.parentTextHash,
+        textContent: selectionData.textContent,
+        documentUrl: selectionData.documentUrl,
+        timestamp: selectionData.timestamp
+      } : null; // Use null instead of undefined to avoid empty objects
+
       // Insert annotation and get the created record with profile info
       const { data: insertedAnnotation, error: insertErr } = await supabase
         .from("annotations")
@@ -631,8 +875,9 @@ export default function Crossie() {
           page_id: page.id,
           user_id: authState.user.id,
           content: annotationText,
-          annotation_type: isTextAnnotation ? "text" : "text",
+          annotation_type: "text",
           highlighted_text: highlightedText,
+          coordinates: coordinates // Store selection data here
         })
         .select(
           "id, content, created_at, user_id, annotation_type, highlighted_text, image_data, coordinates, user:profiles ( id, username )"
@@ -650,8 +895,26 @@ export default function Crossie() {
           user: (Array.isArray(insertedAnnotation.user) ? insertedAnnotation.user[0] : insertedAnnotation.user) || authState.profile,
           annotationType: insertedAnnotation.annotation_type,
           highlightedText: insertedAnnotation.highlighted_text,
-          imageData: insertedAnnotation.image_data,
-          coordinates: insertedAnnotation.coordinates,
+          // Parse selection data from coordinates field
+          selectionData: insertedAnnotation.coordinates?.type === 'text-selection' ? {
+            selectedText: insertedAnnotation.highlighted_text || insertedAnnotation.coordinates.selectedText || '',
+            selectors: insertedAnnotation.coordinates.selectors || [],
+            startNodePath: insertedAnnotation.coordinates.startNodePath,
+            endNodePath: insertedAnnotation.coordinates.endNodePath,
+            startOffset: insertedAnnotation.coordinates.startOffset,
+            endOffset: insertedAnnotation.coordinates.endOffset,
+            parentSelector: insertedAnnotation.coordinates.parentSelector,
+            precedingText: insertedAnnotation.coordinates.precedingText,
+            followingText: insertedAnnotation.coordinates.followingText,
+            rangeStartOffset: insertedAnnotation.coordinates.rangeStartOffset,
+            rangeEndOffset: insertedAnnotation.coordinates.rangeEndOffset,
+            parentTextHash: insertedAnnotation.coordinates.parentTextHash,
+            textContent: insertedAnnotation.coordinates.textContent,
+            documentUrl: insertedAnnotation.coordinates.documentUrl,
+            timestamp: insertedAnnotation.coordinates.timestamp
+          } : undefined,
+          isExpanded: false,
+          isHighlightExpanded: false
         };
 
         setAnnotations((cur) =>
@@ -661,6 +924,9 @@ export default function Crossie() {
         // Store mapping for realtime deduplication
         optimisticToRealIdRef.current.set(optimisticId, insertedAnnotation.id);
       }
+
+      // Clear the stored selection after successful annotation
+      sendToParent({ type: "CLEAR_SELECTION" });
 
       // If page was just created, update the subscription and immediately load annotations
       if (pageWasJustCreated) {
@@ -698,6 +964,29 @@ export default function Crossie() {
     url,
     setupRealtimeSubscription,
   ]);
+
+  // Function to scroll to highlighted text
+  const scrollToHighlight = useCallback((annotation: Annotation) => {
+    if (annotation.selectionData) {
+      sendToParent({
+        type: "SCROLL_TO_HIGHLIGHT",
+        payload: { selectionData: annotation.selectionData }
+      });
+    } else if (annotation.highlightedText) {
+      // Fallback: try to scroll using just the highlighted text
+      console.log('No selection data, trying text-based scroll fallback');
+      sendToParent({
+        type: "SCROLL_TO_HIGHLIGHT",
+        payload: { 
+          selectionData: { 
+            selectedText: annotation.highlightedText 
+          } 
+        }
+      });
+    } else {
+      console.log('No selection data or highlighted text available for scrolling');
+    }
+  }, []);
 
   const retryAnnotation = useCallback(
     async (failedAnnotation: Annotation) => {
@@ -1129,11 +1418,18 @@ export default function Crossie() {
                       <div className="space-y-2">
                         {ann.annotationType === "text" &&
                           ann.highlightedText && (
-                            <div className="bg-yellow-200 text-black px-2 py-1 rounded text-xs font-medium">
-                              "{ann.highlightedText}"
-                            </div>
+                            <HighlightedTextContent
+                              highlightedText={ann.highlightedText}
+                              isExpanded={ann.isHighlightExpanded || false}
+                              onToggleExpand={() => toggleHighlightExpansion(ann.id)}
+                              onScrollToHighlight={() => scrollToHighlight(ann)}
+                            />
                           )}
-                        <p className="text-sm break-all">{ann.content}</p>
+                        <AnnotationContent
+                          content={ann.content}
+                          isExpanded={ann.isExpanded || false}
+                          onToggleExpand={() => toggleAnnotationExpansion(ann.id)}
+                        />
                       </div>
                     )}
                   </div>
