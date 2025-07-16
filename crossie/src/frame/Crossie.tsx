@@ -5,16 +5,18 @@ import { canonicalise } from "../lib/canonicalise";
 
 interface Annotation {
   id: string;
-  content: string; // The annotation comment
+  content: string;
   timestamp: Date;
   user: Profile;
-  annotationType: 'text' | 'image' | 'area';
-  highlightedText?: string; // For text annotations
-  imageData?: string; // For image annotations
-  coordinates?: { x: number; y: number; width: number; height: number }; // For area annotations
+  annotationType: "text" | "image" | "area";
+  highlightedText?: string;
+  imageData?: string;
+  coordinates?: { x: number; y: number; width: number; height: number };
   isEditing?: boolean;
-  isOptimistic?: boolean; // For optimistic updates
-  error?: boolean; // For failed sends
+  isOptimistic?: boolean;
+  error?: boolean;
+  // Add optimistic tracking ID
+  optimisticId?: string;
 }
 
 interface Page {
@@ -34,7 +36,6 @@ interface Project {
   createdAt: Date;
 }
 
-// Message protocol for parent window communication
 interface ParentMessage {
   type:
     | "CROSSIE_RESIZE"
@@ -49,38 +50,51 @@ interface ParentMessage {
   payload?: any;
 }
 
-function sendToParent(message: ParentMessage) {
+const sendToParent = (message: ParentMessage) =>
   window.parent.postMessage(message, "*");
-}
 
-// Memoized helper functions outside component
-const getInitial = (str: string): string => {
-  if (!str) return "?";
-  return str.trim()[0].toUpperCase();
+const saveSelectedProject = (project: Project | null, url?: string) => {
+  if (typeof chrome !== "undefined" && chrome.storage?.local) {
+    const key = url ? `selectedProject_${url}` : "selectedProject";
+    chrome.storage.local.set({ [key]: project });
+  }
 };
 
+const loadSelectedProject = (url?: string): Promise<Project | null> => {
+  return new Promise((resolve) => {
+    if (typeof chrome !== "undefined" && chrome.storage?.local) {
+      const key = url ? `selectedProject_${url}` : "selectedProject";
+      chrome.storage.local.get([key], (result) => resolve(result[key] || null));
+    } else {
+      resolve(null);
+    }
+  });
+};
+
+const clearAllSavedProjects = () => {
+  if (typeof chrome !== "undefined" && chrome.storage?.local) {
+    chrome.storage.local.clear();
+  }
+};
+
+const getInitial = (str: string): string =>
+  str?.trim()[0]?.toUpperCase() || "?";
 const stringToColor = (str: string): string => {
   let hash = 0;
-  for (let i = 0; i < str.length; i++) {
+  for (let i = 0; i < str.length; i++)
     hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  }
-  const hue = hash % 360;
-  return `hsl(${hue}, 60%, 60%)`;
+  return `hsl(${hash % 360}, 60%, 60%)`;
 };
-
 const getRelativeTime = (timestamp: Date): string => {
-  const now = Date.now();
-  const diff = now - timestamp.getTime();
-  const seconds = Math.floor(diff / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
+  const diff = Date.now() - timestamp.getTime();
+  const seconds = Math.floor(diff / 1000),
+    minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60),
+    days = Math.floor(hours / 24);
   if (seconds < 60) return "just now";
   if (minutes < 60) return `${minutes}m`;
   if (hours < 24) return `${hours}h`;
   if (days < 30) return `${days}d`;
-
   return timestamp.toLocaleDateString();
 };
 
@@ -96,55 +110,46 @@ export default function Crossie() {
     loading: true,
   });
   const [sending, setSending] = useState(false);
+  const [loadingAnnotations, setLoadingAnnotations] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
   const [isTabActive, setIsTabActive] = useState(!document.hidden);
   const [textAnnotationRequest, setTextAnnotationRequest] = useState<{
     selectedText: string;
     originalText: string;
   } | null>(null);
-
-  // Project management state
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [currentPage, setCurrentPage] = useState<Page | null>(null);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProject, setNewProject] = useState({
-    name: '',
-    description: '',
-    isTeamProject: false
+    name: "",
+    description: "",
+    isTeamProject: false,
   });
-
-  // Memoize URL parsing
-  const url = useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    const rawHost = params.get("host") || "";
-    return canonicalise(decodeURIComponent(rawHost));
-  }, []);
-
-  const [projectId, setProjectId] = useState<string | null>(null);
-  const [pageId, setPageId] = useState<string | null>(null);
   const [authInitialized, setAuthInitialized] = useState(false);
 
   const annotationsRef = useRef<HTMLDivElement>(null);
   const realtimeChannelRef = useRef<any>(null);
-  const authCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const optimisticCounterRef = useRef(0);
-  const newProjectRef = useRef(false);
+  // Track optimistic IDs to real IDs mapping
+  const optimisticToRealIdRef = useRef<Map<string, string>>(new Map());
 
-  // Initialize auth by requesting from parent
+  const url = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return canonicalise(decodeURIComponent(params.get("host") || ""));
+  }, []);
+
   useEffect(() => {
     sendToParent({ type: "REQUEST_AUTH_STATE" });
-
     const handleMessage = async (event: MessageEvent) => {
       if (event.data?.type === "AUTH_STATE_UPDATE") {
         const { authData, profile } = event.data.payload || {};
-
         if (authData?.access_token) {
           await supabaseAuthClient.setAuth(authData.access_token);
           setAuthState({
             user: authData.user,
-            profile: profile,
+            profile,
             authenticated: true,
             loading: false,
           });
@@ -158,552 +163,515 @@ export default function Crossie() {
             loading: false,
           });
           setAuthInitialized(true);
+          setSelectedProject(null);
+          saveSelectedProject(null, url);
         }
       }
-
       if (event.data?.type === "CROSSIE_SHOW") {
         setIsVisible(true);
-        if (!document.hidden) {
-          sendToParent({ type: "REQUEST_AUTH_STATE" });
-        }
+        if (!document.hidden) sendToParent({ type: "REQUEST_AUTH_STATE" });
       }
-
-      if (event.data?.type === "CROSSIE_MINIMIZE") {
-        setIsVisible(false);
-      }
-
+      if (event.data?.type === "CROSSIE_MINIMIZE") setIsVisible(false);
       if (event.data?.type === "ANNOTATION_REQUEST") {
-        const { selectedText, originalText } = event.data.payload || {};
-        setTextAnnotationRequest({ selectedText, originalText });
-        // Pre-fill the textarea with the selected text context
-        setTxt(`Annotation for: "${selectedText}"\n\n`);
+        setIsVisible(true);
+        sendToParent({ type: "REQUEST_AUTH_STATE" });
       }
-
       if (event.data?.type === "TEXT_SELECTION") {
         const { selectedText, originalText } = event.data.payload || {};
-        setTextAnnotationRequest({ selectedText, originalText });
-        // Pre-fill the textarea with the selected text context
-        setTxt(`Annotation for: "${selectedText}"\n\n`);
+        if (selectedText && originalText) {
+          setTextAnnotationRequest({ selectedText, originalText });
+          setIsVisible(true);
+        }
       }
     };
-
     window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [url]);
 
-    return () => {
-      window.removeEventListener("message", handleMessage);
-      if (authCheckIntervalRef.current) {
-        clearInterval(authCheckIntervalRef.current);
-      }
-    };
-  }, []);
-
-  // Handle tab visibility changes
   useEffect(() => {
     const handleVisibilityChange = () => {
       const isActive = !document.hidden;
       setIsTabActive(isActive);
-
-      if (isActive && isVisible) {
-        sendToParent({ type: "REQUEST_AUTH_STATE" });
-      }
+      if (isActive && isVisible) sendToParent({ type: "REQUEST_AUTH_STATE" });
     };
-
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () =>
       document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [isVisible]);
 
-  // Manage periodic auth check interval
+  // On extension load, only attempt to load the page, do not create it
   useEffect(() => {
-    if (authCheckIntervalRef.current) {
-      clearInterval(authCheckIntervalRef.current);
-      authCheckIntervalRef.current = null;
-    }
-
-    if (isVisible && isTabActive) {
-      authCheckIntervalRef.current = setInterval(() => {
-        sendToParent({ type: "REQUEST_AUTH_STATE" });
-      }, 600000); // Every 10 minutes
-    }
-
-    return () => {
-      if (authCheckIntervalRef.current) {
-        clearInterval(authCheckIntervalRef.current);
-        authCheckIntervalRef.current = null;
-      }
-    };
-  }, [isVisible, isTabActive]);
-
-  // Load or create page when URL is available
-  useEffect(() => {
-    if (!url || !authInitialized) return;
-
-    const loadOrCreatePage = async () => {
-      const urlHash = btoa(url).replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
-      
-      // Try to find existing page
-      const { data: existingPage, error: pageError } = await supabase
-        .from("pages")
-        .select("id, url, url_hash, title, created_at")
-        .eq("url_hash", urlHash)
-        .maybeSingle();
-
-      if (pageError) {
-        console.error("[Crossie] Error loading page:", pageError);
-        return;
-      }
-
-      if (existingPage) {
-        const page: Page = {
-          id: existingPage.id,
-          url: existingPage.url,
-          urlHash: existingPage.url_hash,
-          title: existingPage.title,
-          createdAt: new Date(existingPage.created_at)
-        };
-        setCurrentPage(page);
-        setPageId(existingPage.id);
-      } else {
-        // Create new page
-        const { data: newPage, error: createError } = await supabase
+    if (!authState.authenticated || !authState.user || !url) return;
+    const loadPage = async () => {
+      try {
+        const urlHash = btoa(url).replace(/[^a-zA-Z0-9]/g, "");
+        const { data: existingPage } = await supabase
           .from("pages")
-          .insert({
-            url: url,
-            url_hash: urlHash,
-            title: document.title || url
-          })
           .select("id, url, url_hash, title, created_at")
-          .single();
-
-        if (createError) {
-          console.error("[Crossie] Error creating page:", createError);
-          return;
+          .eq("url_hash", urlHash)
+          .maybeSingle();
+        if (existingPage) {
+          setCurrentPage({
+            id: existingPage.id,
+            url: existingPage.url,
+            urlHash: existingPage.url_hash,
+            title: existingPage.title,
+            createdAt: new Date(existingPage.created_at),
+          });
+        } else {
+          setCurrentPage(null);
         }
-
-        const page: Page = {
-          id: newPage.id,
-          url: newPage.url,
-          urlHash: newPage.url_hash,
-          title: newPage.title,
-          createdAt: new Date(newPage.created_at)
-        };
-        setCurrentPage(page);
-        setPageId(newPage.id);
+      } catch (error) {
+        console.error("Error loading page:", error);
       }
     };
+    loadPage();
+  }, [authState.authenticated, authState.user, url]);
 
-    loadOrCreatePage();
-  }, [url, authInitialized]);
-
-  // Fetch user's projects when authenticated
   useEffect(() => {
     if (!authState.authenticated || !authState.user) return;
-
     const fetchProjects = async () => {
       try {
         const userId = authState.user!.id;
-        // First, get projects created by the user
         const { data: ownedProjects, error: ownedError } = await supabase
           .from("projects")
-          .select(`
-            id,
-            name,
-            description,
-            is_team_project,
-            created_by,
-            created_at
-          `)
+          .select(
+            "id, name, description, is_team_project, created_by, created_at"
+          )
           .eq("created_by", userId);
-
         if (ownedError) throw ownedError;
-
-        // Then, get projects where user is a member
         const { data: memberProjects, error: memberError } = await supabase
           .from("project_members")
-          .select(`
-            project:projects (
-              id,
-              name,
-              description,
-              is_team_project,
-              created_by,
-              created_at
-            )
-          `)
+          .select(
+            "project:projects ( id, name, description, is_team_project, created_by, created_at )"
+          )
           .eq("user_id", userId);
-
         if (memberError) throw memberError;
-
-        // Combine and deduplicate projects
         const allProjects = [
           ...(ownedProjects || []),
-          ...(memberProjects || []).map((mp: any) => mp.project).filter(Boolean)
+          ...(memberProjects || [])
+            .map((mp: any) => mp.project)
+            .filter(Boolean),
         ];
-
-        // Remove duplicates based on project ID
-        const uniqueProjects = allProjects.filter((project, index, self) => 
-          index === self.findIndex(p => p.id === project.id)
+        const uniqueProjects = allProjects.filter(
+          (project, index, self) =>
+            index === self.findIndex((p) => p.id === project.id)
         );
-
-        // Sort by created_at descending
-        const sortedProjects = uniqueProjects.sort((a, b) => 
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        const sortedProjects = uniqueProjects.sort(
+          (a, b) =>
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         );
-
         const mappedProjects = sortedProjects.map((p: any) => ({
           id: p.id,
           name: p.name,
           description: p.description,
           isTeamProject: p.is_team_project,
           createdBy: p.created_by,
-          createdAt: new Date(p.created_at)
+          createdAt: new Date(p.created_at),
         }));
-
         setProjects(mappedProjects);
       } catch (error) {
         console.error("Error fetching projects:", error);
       }
     };
-
     fetchProjects();
   }, [authState.authenticated, authState.user]);
 
-  // Project management functions
+  useEffect(() => {
+    if (
+      projects.length > 0 &&
+      !selectedProject &&
+      authState.authenticated &&
+      url
+    ) {
+      loadSelectedProject(url).then((savedProject) => {
+        if (savedProject) {
+          const projectExists = projects.find((p) => p.id === savedProject.id);
+          if (projectExists) setSelectedProject(projectExists);
+        }
+      });
+    }
+  }, [projects, selectedProject, authState.authenticated, url]);
+
+  useEffect(() => {
+    if (!authState.authenticated && authInitialized) clearAllSavedProjects();
+  }, [authState.authenticated, authInitialized]);
+
   const createProject = async () => {
     if (!authState.user || !newProject.name) return;
-
     try {
       const userId = authState.user.id;
-      
       const { data, error } = await supabase
         .from("projects")
         .insert({
           name: newProject.name,
           description: newProject.description,
           created_by: userId,
-          is_team_project: newProject.isTeamProject
+          is_team_project: newProject.isTeamProject,
         })
         .select()
         .single();
-
       if (error) throw error;
-
-      // Add user as project member
       if (authState.user) {
-        await supabase
-          .from("project_members")
-          .insert({
-            project_id: data.id,
-            user_id: authState.user.id,
-            role: 'owner'
-          });
+        await supabase.from("project_members").insert({
+          project_id: data.id,
+          user_id: authState.user.id,
+          role: "owner",
+        });
       }
-
-      // Add current page to the new project
       if (currentPage) {
-        await supabase
-          .from("project_pages")
-          .insert({
-            project_id: data.id,
-            page_id: currentPage.id,
-            added_by: userId
-          });
+        await supabase.from("project_pages").insert({
+          project_id: data.id,
+          page_id: currentPage.id,
+          added_by: userId,
+        });
       }
-
       const newProjectObj: Project = {
         id: data.id,
         name: data.name,
         description: data.description,
         isTeamProject: data.is_team_project,
         createdBy: data.created_by,
-        createdAt: new Date(data.created_at)
+        createdAt: new Date(data.created_at),
       };
-
       setProjects([newProjectObj, ...projects]);
       setSelectedProject(newProjectObj);
-      setProjectId(data.id);
       setShowCreateProject(false);
-      setNewProject({ name: '', description: '', isTeamProject: false });
+      setNewProject({ name: "", description: "", isTeamProject: false });
+      saveSelectedProject(newProjectObj, url);
+      if (currentPage) setupRealtimeSubscription(data.id, currentPage.id);
     } catch (error) {
       console.error("Error creating project:", error);
       alert("Failed to create project");
     }
   };
 
-  const selectProject = (project: Project) => {
+  const selectProject = async (project: Project) => {
     setSelectedProject(project);
-    setProjectId(project.id);
     setShowProjectSelector(false);
-  };
+    saveSelectedProject(project, url);
 
-  // Close dropdowns when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (showProjectSelector) {
-        setShowProjectSelector(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showProjectSelector]);
-
-  // Set up realtime subscription for a specific project and page
-  const setupRealtimeSubscription = useCallback((pid: string, pageId: string) => {
-    // Clean up previous channel if exists
-    if (realtimeChannelRef.current) {
-      supabase.removeChannel(realtimeChannelRef.current);
-    }
-
-    const channel = supabase
-      .channel(`annotations-project-${pid}-page-${pageId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "annotations",
-          filter: `project_id=eq.${pid} AND page_id=eq.${pageId}`,
-        },
-        async ({ new: annotation }) => {
-          if (!annotation) return;
-
-          // Fetch the user profile for the new annotation
-          const { data: profileData } = await supabase
-            .from("profiles")
-            .select("id, username")
-            .eq("id", annotation.user_id)
-            .single();
-
-          const newAnnotation: Annotation = {
-            id: annotation.id,
-            content: annotation.content,
-            timestamp: new Date(annotation.created_at),
-            user: profileData || {
-              id: annotation.user_id,
-              username: "Anonymous",
-            },
-            annotationType: annotation.annotation_type,
-            highlightedText: annotation.highlighted_text,
-            imageData: annotation.image_data,
-            coordinates: annotation.coordinates,
-          };
-
-          setAnnotations((cur) => {
-            // Remove matching optimistic annotation and add real annotation
-            const filtered = cur.filter((ann) => {
-              if (!ann.isOptimistic) return true;
-
-              return !(
-                ann.content === annotation.content &&
-                ann.user.id === annotation.user_id &&
-                Math.abs(
-                  ann.timestamp.getTime() -
-                    new Date(annotation.created_at).getTime()
-                ) < 30000
-              );
-            });
-
-            // Add new annotation if not already exists
-            if (!filtered.find((ann) => ann.id === annotation.id)) {
-              return [newAnnotation, ...filtered];
-            }
-            return filtered;
+    if (currentPage && authState.user) {
+      try {
+        const { data: existingProjectPage } = await supabase
+          .from("project_pages")
+          .select("id")
+          .eq("project_id", project.id)
+          .eq("page_id", currentPage.id)
+          .maybeSingle();
+        if (!existingProjectPage) {
+          await supabase.from("project_pages").insert({
+            project_id: project.id,
+            page_id: currentPage.id,
+            added_by: authState.user.id,
           });
         }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "annotations",
-          filter: `project_id=eq.${pid} AND page_id=eq.${pageId}`,
-        },
-        ({ new: annotation }) => {
-          if (!annotation) return;
-          setAnnotations((cur) =>
-            cur.map((ann) =>
-              ann.id === annotation.id ? { ...ann, content: annotation.content } : ann
-            )
-          );
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "DELETE",
-          schema: "public",
-          table: "annotations",
-          filter: `project_id=eq.${pid} AND page_id=eq.${pageId}`,
-        },
-        (payload) => {
-          const { old: annotation } = payload;
-          if (!annotation) return;
-          setAnnotations((cur) => cur.filter((ann) => ann.id !== annotation.id));
-        }
-      )
-      .subscribe();
-
-    realtimeChannelRef.current = channel;
-    return channel;
-  }, []);
-
-  // Function to highlight text on the page
-  const highlightTextOnPage = useCallback((text: string) => {
-    sendToParent({
-      type: "HIGHLIGHT_TEXT",
-      payload: { text },
-    });
-  }, []);
-
-  // Set up subscriptions and fetch existing annotations when project and page are available
-  useEffect(() => {
-    if (!projectId || !pageId || !authInitialized) {
-      return;
+        await loadAnnotations(project.id, currentPage.id);
+        setupRealtimeSubscription(project.id, currentPage.id);
+      } catch (error) {
+        console.error("Error selecting project:", error);
+      }
     }
+  };
 
-    // Only fetch existing annotations if this is NOT a new project
-    if (!newProjectRef.current) {
-      // This is an existing project, so fetch annotations and set up subscription
-      supabase
+  const loadAnnotations = async (projectId: string, pageId: string) => {
+    setLoadingAnnotations(true);
+    try {
+      const { data: annotationsData, error: annotationsError } = await supabase
         .from("annotations")
-        .select(`
-          id, content, created_at, user_id, annotation_type, highlighted_text, image_data, coordinates,
-          user:profiles ( id, username )
-        `
+        .select(
+          "id, content, created_at, user_id, annotation_type, highlighted_text, image_data, coordinates, user:profiles ( id, username )"
         )
         .eq("project_id", projectId)
         .eq("page_id", pageId)
-        .order("created_at", { ascending: false })
-        .then(({ data, error }) => {
-          if (error) {
-            console.error("Error fetching annotations:", error);
-            return;
-          }
+        .order("created_at", { ascending: false });
 
-          if (data) {
-            const mapped = data.map((a: any) => ({
-              id: a.id,
-              content: a.content,
-              timestamp: new Date(a.created_at),
-              user: {
-                id: a.user.id,
-                username: a.user.username,
-              },
-              annotationType: a.annotation_type,
-              highlightedText: a.highlighted_text,
-              imageData: a.image_data,
-              coordinates: a.coordinates,
-            }));
+      if (annotationsError) {
+        console.error("Error fetching annotations:", annotationsError);
+      } else if (annotationsData) {
+        const mapped = annotationsData.map((a: any) => ({
+          id: a.id,
+          content: a.content,
+          timestamp: new Date(a.created_at),
+          user: { id: a.user.id, username: a.user.username },
+          annotationType: a.annotation_type,
+          highlightedText: a.highlighted_text,
+          imageData: a.image_data,
+          coordinates: a.coordinates,
+        }));
+        setAnnotations(mapped);
+      }
+    } finally {
+      setLoadingAnnotations(false);
+    }
+  };
 
-            // Preserve optimistic annotations when setting fetched annotations
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showProjectSelector) {
+        const target = event.target as Element;
+        const projectSelector = document.querySelector(
+          "[data-project-selector]"
+        );
+        if (projectSelector && !projectSelector.contains(target))
+          setShowProjectSelector(false);
+      }
+    };
+    document.addEventListener("click", handleClickOutside);
+    return () => document.removeEventListener("click", handleClickOutside);
+  }, [showProjectSelector]);
+
+  const setupRealtimeSubscription = useCallback(
+    (projectId: string, pageId: string) => {
+      if (realtimeChannelRef.current)
+        supabase.removeChannel(realtimeChannelRef.current);
+
+      const channel = supabase
+        .channel(`annotations-project-${projectId}-page-${pageId}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "annotations",
+            filter: `project_id=eq.${projectId}`,
+          },
+          async (payload) => {
+            const annotation = payload.new;
+            if (!annotation || annotation.page_id !== pageId) return;
+
+            // Check if we already have this annotation (from immediate insert response)
             setAnnotations((current) => {
-              const optimisticAnnotations = current.filter(
-                (ann) => ann.isOptimistic
-              );
-              return [...optimisticAnnotations, ...mapped];
+              if (current.find((ann) => ann.id === annotation.id)) {
+                return current;
+              }
+
+              // If not, fetch profile and add it
+              supabase
+                .from("profiles")
+                .select("id, username")
+                .eq("id", annotation.user_id)
+                .single()
+                .then(({ data: profileData }) => {
+                  const newAnnotation: Annotation = {
+                    id: annotation.id,
+                    content: annotation.content,
+                    timestamp: new Date(annotation.created_at),
+                    user: profileData || {
+                      id: annotation.user_id,
+                      username: "Anonymous",
+                    },
+                    annotationType: annotation.annotation_type,
+                    highlightedText: annotation.highlighted_text,
+                    imageData: annotation.image_data,
+                    coordinates: annotation.coordinates,
+                  };
+
+                  setAnnotations((cur) => {
+                    // Check again if annotation exists
+                    if (cur.find((ann) => ann.id === annotation.id)) {
+                      return cur;
+                    }
+                    // Remove any remaining optimistic annotations that match
+                    const filtered = cur.filter((ann) => {
+                      if (!ann.isOptimistic) return true;
+                      return !(
+                        ann.content === annotation.content &&
+                        ann.user.id === annotation.user_id &&
+                        ann.highlightedText === annotation.highlighted_text
+                      );
+                    });
+                    return [newAnnotation, ...filtered];
+                  });
+                });
+
+              return current;
             });
           }
-        });
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "UPDATE",
+            schema: "public",
+            table: "annotations",
+            filter: `project_id=eq.${projectId}`,
+          },
+          (payload) => {
+            const annotation = payload.new;
+            if (!annotation || annotation.page_id !== pageId) return;
 
-      // Set up realtime subscription for existing projects
-      if (projectId && pageId) {
-        setupRealtimeSubscription(projectId, pageId);
-      }
-    } else {
-      // Reset the flag
-      newProjectRef.current = false;
-    }
+            setAnnotations((current) =>
+              current.map((ann) =>
+                ann.id === annotation.id
+                  ? { ...ann, content: annotation.content }
+                  : ann
+              )
+            );
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "DELETE",
+            schema: "public",
+            table: "annotations",
+            filter: `project_id=eq.${projectId}`,
+          },
+          (payload) => {
+            const annotation = payload.old;
+            if (!annotation || annotation.page_id !== pageId) return;
+
+            setAnnotations((current) =>
+              current.filter((ann) => ann.id !== annotation.id)
+            );
+          }
+        )
+        .subscribe();
+
+      realtimeChannelRef.current = channel;
+      return channel;
+    },
+    []
+  );
+
+  useEffect(() => {
+    if (!selectedProject || !currentPage || !authInitialized) return;
+
+    loadAnnotations(selectedProject.id, currentPage.id);
+    setupRealtimeSubscription(selectedProject.id, currentPage.id);
 
     return () => {
-      // Only clean up if this wasn't a new project (new projects already have subscription set up)
-      if (realtimeChannelRef.current && !newProjectRef.current) {
+      if (realtimeChannelRef.current) {
         supabase.removeChannel(realtimeChannelRef.current);
         realtimeChannelRef.current = null;
       }
     };
-  }, [projectId, pageId, authInitialized, setupRealtimeSubscription]);
+  }, [
+    selectedProject,
+    currentPage,
+    authInitialized,
+    setupRealtimeSubscription,
+  ]);
 
-  // Send annotation with optimistic updates
   const send = useCallback(async () => {
-    if (!txt.trim() || !authState.profile || !authState.user || sending || !selectedProject || !currentPage) {
+    if (
+      !txt.trim() ||
+      !authState.profile ||
+      !authState.user ||
+      sending ||
+      !selectedProject
+    )
       return;
-    }
 
     setSending(true);
-
-    // Check if this is a text annotation
     const isTextAnnotation = !!textAnnotationRequest;
     const highlightedText = textAnnotationRequest?.selectedText;
-
-    // Create optimistic annotation
     const optimisticId = `optimistic-${Date.now()}-${++optimisticCounterRef.current}`;
     const optimisticAnnotation: Annotation = {
       id: optimisticId,
       content: txt.trim(),
       timestamp: new Date(),
       user: authState.profile,
-      annotationType: isTextAnnotation ? 'text' : 'text',
+      annotationType: isTextAnnotation ? "text" : "text",
       isOptimistic: true,
-      highlightedText: highlightedText,
+      highlightedText,
+      optimisticId,
     };
-
-    // Add optimistic annotation to UI immediately
     setAnnotations((cur) => [optimisticAnnotation, ...cur]);
-
-    // Clear input immediately for better UX
     const annotationText = txt.trim();
     setTxt("");
-    
-    // Clear text annotation request after sending
-    if (isTextAnnotation) {
-      setTextAnnotationRequest(null);
-    }
+    if (isTextAnnotation) setTextAnnotationRequest(null);
 
     try {
-      // Ensure page is added to project if not already
+      let page = currentPage;
+      let pageWasJustCreated = false;
+
+      // If currentPage is null, create the page now
+      if (!page) {
+        const urlHash = btoa(url).replace(/[^a-zA-Z0-9]/g, "");
+        const { data: newPage, error: insertError } = await supabase
+          .from("pages")
+          .insert({ url, url_hash: urlHash, title: document.title })
+          .select()
+          .single();
+        if (insertError) throw insertError;
+        page = {
+          id: newPage.id,
+          url: newPage.url,
+          urlHash: newPage.url_hash,
+          title: newPage.title,
+          createdAt: new Date(newPage.created_at),
+        };
+        setCurrentPage(page);
+        pageWasJustCreated = true;
+      }
+
+      // Ensure project_pages exists
       const { data: existingProjectPage } = await supabase
         .from("project_pages")
         .select("id")
         .eq("project_id", selectedProject.id)
-        .eq("page_id", currentPage.id)
+        .eq("page_id", page.id)
         .maybeSingle();
 
       if (!existingProjectPage) {
-        await supabase
-          .from("project_pages")
-          .insert({
-            project_id: selectedProject.id,
-            page_id: currentPage.id,
-            added_by: authState.user.id
-          });
+        await supabase.from("project_pages").insert({
+          project_id: selectedProject.id,
+          page_id: page.id,
+          added_by: authState.user.id,
+        });
       }
 
-      // Insert the annotation
-      const { error: insertErr } = await supabase.from("annotations").insert({
-        project_id: selectedProject.id,
-        page_id: currentPage.id,
-        user_id: authState.user.id,
-        content: annotationText,
-        annotation_type: isTextAnnotation ? 'text' : 'text',
-        highlighted_text: highlightedText,
-      });
+      // Insert annotation and get the created record with profile info
+      const { data: insertedAnnotation, error: insertErr } = await supabase
+        .from("annotations")
+        .insert({
+          project_id: selectedProject.id,
+          page_id: page.id,
+          user_id: authState.user.id,
+          content: annotationText,
+          annotation_type: isTextAnnotation ? "text" : "text",
+          highlighted_text: highlightedText,
+        })
+        .select(
+          "id, content, created_at, user_id, annotation_type, highlighted_text, image_data, coordinates, user:profiles ( id, username )"
+        )
+        .single();
 
-      if (insertErr) {
-        throw new Error(`Insert failed: ${insertErr.message}`);
+      if (insertErr) throw new Error(`Insert failed: ${insertErr.message}`);
+
+      // Immediately replace the optimistic annotation with the real one
+      if (insertedAnnotation) {
+        const realAnnotation: Annotation = {
+          id: insertedAnnotation.id,
+          content: insertedAnnotation.content,
+          timestamp: new Date(insertedAnnotation.created_at),
+          user: (Array.isArray(insertedAnnotation.user) ? insertedAnnotation.user[0] : insertedAnnotation.user) || authState.profile,
+          annotationType: insertedAnnotation.annotation_type,
+          highlightedText: insertedAnnotation.highlighted_text,
+          imageData: insertedAnnotation.image_data,
+          coordinates: insertedAnnotation.coordinates,
+        };
+
+        setAnnotations((cur) =>
+          cur.map((ann) => (ann.id === optimisticId ? realAnnotation : ann))
+        );
+
+        // Store mapping for realtime deduplication
+        optimisticToRealIdRef.current.set(optimisticId, insertedAnnotation.id);
       }
 
-      // Scroll to top
-      if (annotationsRef.current) {
+      // If page was just created, update the subscription and immediately load annotations
+      if (pageWasJustCreated) {
+        setupRealtimeSubscription(selectedProject.id, page.id);
+        await loadAnnotations(selectedProject.id, page.id);
+      }
+
+      if (annotationsRef.current)
         annotationsRef.current.scrollTo({ top: 0, behavior: "smooth" });
-      }
     } catch (error) {
       console.error("[Crossie] Send failed:", error);
-
-      // Mark optimistic annotation as failed
       setAnnotations((cur) =>
         cur.map((ann) =>
           ann.id === optimisticId
@@ -711,28 +679,33 @@ export default function Crossie() {
             : ann
         )
       );
-
-      // Show error to user
       let errorMsg = "Failed to send annotation";
-      if (error && typeof error === "object" && "message" in error) {
+      if (error && typeof error === "object" && "message" in error)
         errorMsg = `Failed to send annotation: ${
           (error as { message: string }).message
         }`;
-      }
       alert(errorMsg);
     } finally {
       setSending(false);
     }
-  }, [txt, authState, selectedProject, currentPage, sending, textAnnotationRequest]);
+  }, [
+    txt,
+    authState,
+    selectedProject,
+    currentPage,
+    sending,
+    textAnnotationRequest,
+    url,
+    setupRealtimeSubscription,
+  ]);
 
-  // Retry failed annotation
   const retryAnnotation = useCallback(
     async (failedAnnotation: Annotation) => {
       if (sending) return;
-
-      setAnnotations((cur) => cur.filter((ann) => ann.id !== failedAnnotation.id));
+      setAnnotations((cur) =>
+        cur.filter((ann) => ann.id !== failedAnnotation.id)
+      );
       setTxt(failedAnnotation.content);
-
       setTimeout(() => send(), 100);
     },
     [sending, send]
@@ -751,17 +724,14 @@ export default function Crossie() {
   const saveEdit = useCallback(
     async (annId: string) => {
       if (!editText.trim()) return;
-
       const { error } = await supabase
         .from("annotations")
         .update({ content: editText.trim() })
         .eq("id", annId);
-
       if (error) {
         console.error("Edit failed:", error);
         return;
       }
-
       setEditingId(null);
       setEditText("");
     },
@@ -771,48 +741,20 @@ export default function Crossie() {
   const deleteAnnotation = useCallback(
     async (annId: string) => {
       if (!confirm("Are you sure you want to delete this annotation?")) return;
-
-      // Optimistic update - remove from UI immediately
       setAnnotations((cur) => cur.filter((ann) => ann.id !== annId));
-
       const { error } = await supabase
         .from("annotations")
         .delete()
         .eq("id", annId);
-
       if (error) {
         console.error("Delete failed:", error);
-        // Revert optimistic update on error
-        if (projectId && pageId) {
-          const { data } = await supabase
-            .from("annotations")
-            .select(
-              `
-            id, content, created_at, user_id, annotation_type, highlighted_text, image_data, coordinates,
-            user:profiles ( id, username )
-          `
-            )
-            .eq("project_id", projectId)
-            .eq("page_id", pageId)
-            .order("created_at", { ascending: false });
-
-          if (data) {
-            const mapped = data.map((a: any) => ({
-              id: a.id,
-              content: a.content,
-              timestamp: new Date(a.created_at),
-              user: { id: a.user.id, username: a.user.username },
-              annotationType: a.annotation_type,
-              highlightedText: a.highlighted_text,
-              imageData: a.image_data,
-              coordinates: a.coordinates,
-            }));
-            setAnnotations(mapped);
-          }
+        // Reload annotations on error
+        if (selectedProject && currentPage) {
+          loadAnnotations(selectedProject.id, currentPage.id);
         }
       }
     },
-    [projectId, pageId]
+    [selectedProject, currentPage]
   );
 
   const handleKeyPress = useCallback(
@@ -831,21 +773,16 @@ export default function Crossie() {
         e.preventDefault();
         saveEdit(annId);
       }
-      if (e.key === "Escape") {
-        cancelEdit();
-      }
+      if (e.key === "Escape") cancelEdit();
     },
     [saveEdit, cancelEdit]
   );
 
   const isOwnAnnotation = useCallback(
-    (ann: Annotation) => {
-      return authState.user && ann.user.id === authState.user.id;
-    },
+    (ann: Annotation) => authState.user && ann.user.id === authState.user.id,
     [authState.user]
   );
 
-  // Show loading state
   if (authState.loading) {
     return (
       <div className="w-full h-full bg-slate-900 text-white flex items-center justify-center">
@@ -857,7 +794,6 @@ export default function Crossie() {
     );
   }
 
-  // Show sign-in prompt if not authenticated
   if (!authState.authenticated) {
     return (
       <div className="w-full h-full bg-slate-900 text-white flex flex-col">
@@ -866,7 +802,6 @@ export default function Crossie() {
             <span className="text-sm text-slate-300">crossie</span>
           </div>
           <div className="flex items-center space-x-3">
-            {/* Close button */}
             <button
               onClick={() => sendToParent({ type: "CROSSIE_MINIMIZE" })}
               className="hover:bg-slate-700 rounded p-1 transition-colors"
@@ -910,18 +845,20 @@ export default function Crossie() {
     );
   }
 
-  // Show main interface if profile exists
   return (
     <div className="relative select-none h-full flex flex-col">
       <header className="bg-slate-800 px-4 py-3 text-white font-semibold flex items-center justify-between border-b border-slate-700">
         <div className="flex items-center gap-2">
           <div
-            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm flex-shrink-0"
+            className="w-8 h-8 rounded-full flex items-center justify-center font-bold text-white text-sm flex-shrink-0 cursor-pointer"
             style={{
               backgroundColor: stringToColor(
                 authState.profile?.username || authState.profile?.email || ""
               ),
             }}
+            onClick={() =>
+              window.open("https://trycrossie.vercel.app/dashboard", "_blank")
+            }
             title={authState.profile?.username}
           >
             {getInitial(
@@ -929,45 +866,74 @@ export default function Crossie() {
             )}
           </div>
         </div>
-        
-        {/* Project selector */}
         <div className="flex items-center space-x-2">
-          <div className="relative">
+          <div data-project-selector className="relative">
             <button
               onClick={() => setShowProjectSelector(!showProjectSelector)}
               className="flex items-center space-x-2 bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded text-sm transition-colors"
             >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+                />
               </svg>
               <span className="text-xs">
-                {selectedProject ? selectedProject.name : 'Select Project'}
+                {selectedProject ? selectedProject.name : "Select Project"}
               </span>
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              <svg
+                className="w-3 h-3"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M19 9l-7 7-7-7"
+                />
               </svg>
             </button>
-            
-            {/* Project dropdown */}
             {showProjectSelector && (
-              <div className="absolute top-full left-0 mt-1 w-64 bg-slate-700 border border-slate-600 rounded-lg shadow-lg z-10">
+              <div
+                data-project-selector
+                className="absolute top-full left-0 mt-1 w-64 bg-slate-700 border border-slate-600 rounded-lg shadow-lg z-10"
+              >
                 <div className="p-2">
-                  <div className="text-xs text-slate-400 mb-2 px-2">Your Projects</div>
+                  <div className="text-xs text-slate-400 mb-2 px-2">
+                    Your Projects
+                  </div>
                   {projects.length === 0 ? (
-                    <div className="text-xs text-slate-400 px-2 py-1">No projects yet</div>
+                    <div className="text-xs text-slate-400 px-2 py-1">
+                      No projects yet
+                    </div>
                   ) : (
                     <div className="space-y-1">
                       {projects.map((project) => (
-                                                 <button
-                           key={project.id}
-                           onClick={() => selectProject(project)}
-                           className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-slate-600 transition-colors ${
-                             selectedProject?.id === project.id ? 'bg-blue-600 text-white' : 'text-slate-300'
-                           }`}
-                         >
-                           <div className="font-medium">{project.name}</div>
-                           <div className="text-slate-400 truncate">{currentPage?.url || 'Current page'}</div>
-                         </button>
+                        <button
+                          key={project.id}
+                          onClick={() => selectProject(project)}
+                          className={`w-full text-left px-2 py-1 rounded text-xs hover:bg-slate-600 transition-colors ${
+                            selectedProject?.id === project.id
+                              ? "bg-blue-600 text-white"
+                              : "text-slate-300"
+                          }`}
+                        >
+                          <div className="font-medium">{project.name}</div>
+                          <div className="text-slate-400 truncate">
+                            {project.isTeamProject
+                              ? "Team Project"
+                              : "Personal Project"}
+                          </div>
+                        </button>
                       ))}
                     </div>
                   )}
@@ -986,7 +952,6 @@ export default function Crossie() {
               </div>
             )}
           </div>
-          
           <div className="flex items-center space-x-2">
             <div
               className="w-3 h-3 bg-green-400 rounded-full animate-pulse"
@@ -998,8 +963,6 @@ export default function Crossie() {
               </span>
             )}
           </div>
-          
-          {/* Close button */}
           <button
             onClick={() => sendToParent({ type: "CROSSIE_MINIMIZE" })}
             className="hover:bg-slate-700 rounded p-1 transition-colors"
@@ -1020,8 +983,10 @@ export default function Crossie() {
       </header>
 
       <section className="flex-1 bg-slate-900 text-white flex flex-col min-h-0">
-        {/* Annotations area */}
-        <div ref={annotationsRef} className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0">
+        <div
+          ref={annotationsRef}
+          className="flex-1 overflow-y-auto p-4 space-y-3 min-h-0"
+        >
           {!selectedProject ? (
             <div className="flex items-center justify-center h-full min-h-0 -mt-4">
               <div className="text-center">
@@ -1034,17 +999,23 @@ export default function Crossie() {
                   strokeWidth="2"
                   className="mx-auto mb-3 text-slate-400"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+                  />
                 </svg>
                 <p className="text-slate-400 text-sm mb-4">
                   Select a project to start annotating
                 </p>
-                <button
-                  onClick={() => setShowProjectSelector(true)}
-                  className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                >
-                  Choose Project
-                </button>
+              </div>
+            </div>
+          ) : loadingAnnotations ? (
+            <div className="flex items-center justify-center h-full min-h-0 -mt-4">
+              <div className="text-center">
+                <div className="animate-spin w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-3"></div>
+                <p className="text-slate-400 text-sm">Loading annotations...</p>
               </div>
             </div>
           ) : annotations.length === 0 ? (
@@ -1059,10 +1030,10 @@ export default function Crossie() {
                   strokeWidth="2"
                   className="mx-auto mb-3 text-slate-400"
                 >
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-                  <path d="M8 10h.01"/>
-                  <path d="M12 10h.01"/>
-                  <path d="M16 10h.01"/>
+                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  <path d="M8 10h.01" />
+                  <path d="M12 10h.01" />
+                  <path d="M16 10h.01" />
                 </svg>
                 <p className="text-slate-400 text-sm italic">
                   No annotations yet. Start annotating this page!
@@ -1108,24 +1079,26 @@ export default function Crossie() {
                           ⟲ retry
                         </span>
                       )}
-                      {isOwnAnnotation(ann) && !ann.isOptimistic && !ann.error && (
-                        <div className="flex gap-2 ml-auto">
-                          <span
-                            onClick={() => startEdit(ann.id, ann.content)}
-                            className="text-xs text-slate-400 hover:text-slate-300 hover:underline transition-colors cursor-pointer"
-                            title="Edit"
-                          >
-                            ✎
-                          </span>
-                          <span
-                            onClick={() => deleteAnnotation(ann.id)}
-                            className="text-xs text-slate-400 hover:text-slate-300 hover:underline transition-colors cursor-pointer"
-                            title="Delete"
-                          >
-                            🗑
-                          </span>
-                        </div>
-                      )}
+                      {isOwnAnnotation(ann) &&
+                        !ann.isOptimistic &&
+                        !ann.error && (
+                          <div className="flex gap-2 ml-auto">
+                            <span
+                              onClick={() => startEdit(ann.id, ann.content)}
+                              className="text-xs text-slate-400 hover:text-slate-300 hover:underline transition-colors cursor-pointer"
+                              title="Edit"
+                            >
+                              ✎
+                            </span>
+                            <span
+                              onClick={() => deleteAnnotation(ann.id)}
+                              className="text-xs text-slate-400 hover:text-slate-300 hover:underline transition-colors cursor-pointer"
+                              title="Delete"
+                            >
+                              🗑
+                            </span>
+                          </div>
+                        )}
                     </div>
                     {editingId === ann.id ? (
                       <div className="space-y-2">
@@ -1154,11 +1127,12 @@ export default function Crossie() {
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        {ann.annotationType === 'text' && ann.highlightedText && (
-                          <div className="bg-yellow-200 text-black px-2 py-1 rounded text-xs font-medium">
-                            "{ann.highlightedText}"
-                          </div>
-                        )}
+                        {ann.annotationType === "text" &&
+                          ann.highlightedText && (
+                            <div className="bg-yellow-200 text-black px-2 py-1 rounded text-xs font-medium">
+                              "{ann.highlightedText}"
+                            </div>
+                          )}
                         <p className="text-sm break-all">{ann.content}</p>
                       </div>
                     )}
@@ -1169,7 +1143,6 @@ export default function Crossie() {
           )}
         </div>
 
-        {/* Input area */}
         <div className="p-4 border-t border-slate-700 space-y-2 flex-shrink-0">
           {!selectedProject ? (
             <div className="text-center text-slate-400 text-sm">
@@ -1177,10 +1150,24 @@ export default function Crossie() {
             </div>
           ) : (
             <>
+              <div className="bg-blue-600/20 border border-blue-600/30 px-3 py-2 rounded text-xs text-blue-300 mb-2">
+                <div className="font-medium">
+                  Annotating in: {selectedProject.name}
+                </div>
+                <div className="text-blue-200">
+                  {selectedProject.isTeamProject
+                    ? "Team Project"
+                    : "Personal Project"}
+                </div>
+              </div>
               {textAnnotationRequest && (
                 <div className="bg-yellow-200 text-black px-3 py-2 rounded text-sm mb-2">
-                  <div className="font-medium mb-1">Annotating selected text:</div>
-                  <div className="italic">"{textAnnotationRequest.selectedText}"</div>
+                  <div className="font-medium mb-1">
+                    Annotating selected text:
+                  </div>
+                  <div className="italic">
+                    "{textAnnotationRequest.selectedText}"
+                  </div>
                 </div>
               )}
               <textarea
@@ -1189,17 +1176,24 @@ export default function Crossie() {
                 onKeyDown={handleKeyPress}
                 rows={3}
                 className="w-full bg-slate-800 text-white p-3 rounded-lg resize-none placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder={textAnnotationRequest ? "Add your annotation..." : "Add an annotation..."}
+                placeholder={
+                  textAnnotationRequest
+                    ? "Add your annotation..."
+                    : "Add an annotation..."
+                }
                 disabled={sending}
               />
-
               <div className="flex space-x-2">
                 <button
                   onClick={send}
                   disabled={!txt.trim() || sending}
                   className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-400 py-2 px-4 rounded-lg text-white font-medium transition-colors"
                 >
-                  {sending ? "Sending..." : (textAnnotationRequest ? "Add Text Annotation" : "Add Annotation")}
+                  {sending
+                    ? "Sending..."
+                    : textAnnotationRequest
+                    ? "Add Text Annotation"
+                    : "Add Annotation"}
                 </button>
               </div>
             </>
@@ -1207,12 +1201,12 @@ export default function Crossie() {
         </div>
       </section>
 
-      {/* Create Project Modal */}
       {showCreateProject && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-slate-800 rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold text-white mb-4">Create New Project</h3>
-            
+            <h3 className="text-lg font-semibold text-white mb-4">
+              Create New Project
+            </h3>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -1221,43 +1215,54 @@ export default function Crossie() {
                 <input
                   type="text"
                   value={newProject.name}
-                  onChange={(e) => setNewProject({ ...newProject, name: e.target.value })}
+                  onChange={(e) =>
+                    setNewProject({ ...newProject, name: e.target.value })
+                  }
                   className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   placeholder="My Website Project"
                 />
               </div>
-
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-2">
                   Description (Optional)
                 </label>
                 <textarea
                   value={newProject.description}
-                  onChange={(e) => setNewProject({ ...newProject, description: e.target.value })}
+                  onChange={(e) =>
+                    setNewProject({
+                      ...newProject,
+                      description: e.target.value,
+                    })
+                  }
                   className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   rows={3}
                   placeholder="Describe your project..."
                 />
               </div>
-
               <div className="flex items-center">
                 <input
                   type="checkbox"
                   id="team-project"
                   checked={newProject.isTeamProject}
-                  onChange={(e) => setNewProject({ ...newProject, isTeamProject: e.target.checked })}
+                  onChange={(e) =>
+                    setNewProject({
+                      ...newProject,
+                      isTeamProject: e.target.checked,
+                    })
+                  }
                   className="mr-2"
                 />
-                <label htmlFor="team-project" className="text-sm text-slate-300">
+                <label
+                  htmlFor="team-project"
+                  className="text-sm text-slate-300"
+                >
                   This is a team project
                 </label>
               </div>
-
               <div className="text-xs text-slate-400 bg-slate-700 p-3 rounded">
                 <strong>Website:</strong> {url}
               </div>
             </div>
-
             <div className="flex items-center space-x-3 mt-6">
               <button
                 onClick={createProject}
