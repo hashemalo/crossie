@@ -1,5 +1,72 @@
 // src/background.js - Service worker for handling extension-wide messages
 
+// Set up periodic token refresh alarm
+chrome.runtime.onInstalled.addListener(() => {
+  // Create an alarm to check token refresh every 30 minutes
+  chrome.alarms.create('tokenRefresh', { periodInMinutes: 30 });
+});
+
+// Handle the token refresh alarm
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'tokenRefresh') {
+    await checkAndRefreshToken();
+  }
+});
+
+// Function to check and refresh tokens
+async function checkAndRefreshToken() {
+  try {
+    const result = await chrome.storage.local.get(['crossie_auth']);
+    const authData = result.crossie_auth;
+    
+    if (authData && authData.user && authData.expires_at) {
+      const timeUntilExpiry = authData.expires_at - (Date.now() / 1000);
+      
+      // If token expires in less than 10 minutes, try to refresh it
+      if (timeUntilExpiry < 600) { // 600 seconds = 10 minutes
+        console.log('Token expiring soon, attempting background refresh...');
+        
+        // Get Supabase config
+        const configResult = await chrome.storage.local.get(['supabase_config']);
+        const config = configResult.supabase_config || {
+          url: 'https://sxargqkknhkcfvhbttrh.supabase.co',
+          anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4YXJncWtrbmhrY2Z2aGJ0dHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MzEyMDAsImV4cCI6MjA2NjMwNzIwMH0.Q70cLGf69Al2prKMDSkCTnCGTuiKGY-MFK2tQ1g2T-k'
+        };
+        
+        // Attempt to refresh the token
+        const refreshResponse = await fetch(`${config.url}/auth/v1/token?grant_type=refresh_token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': config.anonKey
+          },
+          body: JSON.stringify({
+            refresh_token: authData.refresh_token
+          })
+        });
+        
+        if (refreshResponse.ok) {
+          const refreshData = await refreshResponse.json();
+          
+          const updatedAuthData = {
+            access_token: refreshData.access_token,
+            refresh_token: refreshData.refresh_token,
+            user: refreshData.user,
+            expires_at: refreshData.expires_at
+          };
+          
+          await chrome.storage.local.set({ crossie_auth: updatedAuthData });
+          console.log('Background token refresh successful');
+        } else {
+          console.warn('Background token refresh failed:', refreshResponse.status);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Background token refresh error:', error);
+  }
+}
+
 // Helper function to get auth state from storage
 async function getAuthState() {
   return new Promise((resolve) => {

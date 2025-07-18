@@ -296,20 +296,13 @@
     const startIndex = normalizedFullText.indexOf(normalizedSelectedText);
     
     if (startIndex === -1) {
-      console.log('❌ Failed to find selected text in parent element');
-      console.log('Selected text:', JSON.stringify(normalizedSelectedText));
-      console.log('Parent text:', JSON.stringify(normalizedFullText));
       return null;
     }
     
     const contextLength = 32;
     const prefix = startIndex > 0 ? normalizedFullText.substring(Math.max(0, startIndex - contextLength), startIndex) : '';
     const suffix = normalizedFullText.substring(startIndex + normalizedSelectedText.length, Math.min(normalizedFullText.length, startIndex + normalizedSelectedText.length + contextLength));
-    
-    console.log('✅ Generated TextQuoteSelector:');
-    console.log('Exact:', JSON.stringify(normalizedSelectedText));
-    console.log('Prefix:', JSON.stringify(prefix));
-    console.log('Suffix:', JSON.stringify(suffix));
+
     
     return {
       type: "TextQuoteSelector",
@@ -370,7 +363,6 @@
     
     if (!normalizedSelectedText) return null; // Don't return stored data if no text selected
     
-    console.log('📝 Capturing selection:', JSON.stringify(normalizedSelectedText));
     
     // Get the exact start and end nodes and offsets
     const startNode = range.startContainer;
@@ -395,10 +387,7 @@
     const fullText = parentElement.textContent || '';
     const normalizedFullText = normalizeText(fullText);
     const selectionStart = normalizedFullText.indexOf(normalizedSelectedText);
-    
-    console.log('Parent element text:', JSON.stringify(fullText.substring(0, 100) + '...'));
-    console.log('Selection start index:', selectionStart);
-    
+
     // Generate W3C-style selectors
     const selectors = [];
     
@@ -451,9 +440,7 @@
       documentUrl: window.location.href,
       timestamp: Date.now()
     };
-    
-    console.log('✅ Selection captured successfully');
-    console.log('Generated selectors:', selectors.length);
+
     
     // Store the selection data
     storedSelectionData = selectionData;
@@ -480,20 +467,16 @@
   // Enhanced function to scroll to highlighted text
   function scrollToHighlight(selectionData: any) {
     if (!selectionData) {
-      console.log('❌ No selection data provided for scroll');
       return;
     }
     
-    console.log('🔍 Scrolling to highlight:', selectionData);
     
     // Strategy 1: Try to find highlight using W3C-style selectors
     if (selectionData.selectors && selectionData.selectors.length > 0) {
-      console.log('Trying W3C-style selectors...');
       
       // Try to resolve the original text position
       const range = resolveSelectorsToRange(selectionData.selectors);
       if (range) {
-        console.log('✅ Found range using selectors');
         
         // Look for highlight elements that might contain this range
         const allHighlights = document.querySelectorAll('.crossie-highlight');
@@ -502,7 +485,6 @@
           const targetText = normalizeText(selectionData.selectedText || '');
           
           if (isTextMatch(highlightText, targetText)) {
-            console.log('✅ Found matching highlight, scrolling...');
             scrollToElement(highlight);
             return;
           }
@@ -512,24 +494,19 @@
     
     // Strategy 2: Try using parent selector and text matching
     if (selectionData.parentSelector) {
-      console.log('Trying parent selector strategy...');
       
       const parent = document.querySelector(selectionData.parentSelector);
       if (parent) {
-        console.log('✅ Found parent element');
         
         // Find all highlights within this parent
         const highlights = parent.querySelectorAll('.crossie-highlight');
-        console.log(`Found ${highlights.length} highlights in parent`);
         
         // Try to match the exact text
         const targetText = normalizeText(selectionData.selectedText || '');
         for (const highlight of highlights) {
           const highlightText = normalizeText(highlight.textContent || '');
-          console.log('Comparing:', JSON.stringify(highlightText), 'vs', JSON.stringify(targetText));
           
           if (isTextMatch(highlightText, targetText)) {
-            console.log('✅ Found matching highlight by text');
             scrollToElement(highlight);
             return;
           }
@@ -539,7 +516,6 @@
         for (const highlight of highlights) {
           const highlightText = normalizeText(highlight.textContent || '');
           if (highlightText.includes(targetText) || targetText.includes(highlightText)) {
-            console.log('✅ Found partial matching highlight');
             scrollToElement(highlight);
             return;
           }
@@ -547,7 +523,6 @@
         
         // If still no match, scroll to first highlight in parent
         if (highlights.length > 0) {
-          console.log('⚠️ No exact match, scrolling to first highlight in parent');
           scrollToElement(highlights[0]);
           return;
         }
@@ -555,28 +530,23 @@
     }
     
     // Strategy 3: Search all highlights on the page
-    console.log('Trying global search strategy...');
     
     const allHighlights = document.querySelectorAll('.crossie-highlight');
     const targetText = normalizeText(selectionData.selectedText || '');
     
-    console.log(`Searching ${allHighlights.length} highlights globally for:`, JSON.stringify(targetText));
     
     for (const highlight of allHighlights) {
       const highlightText = normalizeText(highlight.textContent || '');
       if (isTextMatch(highlightText, targetText)) {
-        console.log('✅ Found matching highlight globally');
         scrollToElement(highlight);
         return;
       }
     }
     
     // Strategy 4: Try to re-create the highlight if it doesn't exist
-    console.log('Trying to re-create highlight...');
     if (selectionData.selectedText) {
       const success = highlightTextWithSelectors(selectionData.selectedText, selectionData);
       if (success) {
-        console.log('✅ Re-created highlight, trying to scroll again...');
         // Give it a moment to render, then try scrolling again
         setTimeout(() => {
           const newHighlights = document.querySelectorAll('.crossie-highlight');
@@ -585,7 +555,6 @@
           for (const highlight of newHighlights) {
             const highlightText = normalizeText(highlight.textContent || '');
             if (isTextMatch(highlightText, targetText)) {
-              console.log('✅ Found re-created highlight');
               scrollToElement(highlight);
               return;
             }
@@ -594,12 +563,10 @@
       }
     }
     
-    console.log('❌ Could not find highlight to scroll to');
   }
 
   // Helper function to scroll to an element with enhanced effects
   function scrollToElement(element: Element) {
-    console.log('📍 Scrolling to element:', element);
     
     // Scroll with smooth behavior
     element.scrollIntoView({ 
@@ -726,14 +693,6 @@
     
     if (whitespaceNormalized1 === whitespaceNormalized2) return true;
     
-    // For debugging Unicode issues
-    if (normalized1 !== normalized2) {
-      console.log('Unicode text comparison failed:');
-      console.log('Text 1:', JSON.stringify(normalized1));
-      console.log('Text 2:', JSON.stringify(normalized2));
-      console.log('Text 1 chars:', [...normalized1].map(c => `${c} (U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`));
-      console.log('Text 2 chars:', [...normalized2].map(c => `${c} (U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`));
-    }
     
     return false;
   }
@@ -769,7 +728,6 @@
     const prefix = selector.prefix ? normalizeText(selector.prefix) : '';
     const suffix = selector.suffix ? normalizeText(selector.suffix) : '';
     
-    console.log('Resolving TextQuoteSelector for:', JSON.stringify(exact));
     
     // Create a tree walker to traverse text nodes
     const walker = document.createTreeWalker(
@@ -787,7 +745,6 @@
       const exactIndex = findTextInNode(textContent, selector.exact);
       
       if (exactIndex !== -1) {
-        console.log('Found potential match at index', exactIndex, 'in text:', JSON.stringify(textContent.substring(exactIndex - 10, exactIndex + selector.exact.length + 10)));
         
         // Check prefix and suffix if provided
         let prefixMatch = true;
@@ -796,17 +753,14 @@
         if (prefix) {
           const beforeText = normalizedTextContent.substring(Math.max(0, exactIndex - prefix.length), exactIndex);
           prefixMatch = normalizeText(beforeText).endsWith(prefix);
-          console.log('Prefix check:', JSON.stringify(beforeText), 'ends with', JSON.stringify(prefix), '=', prefixMatch);
         }
         
         if (suffix) {
           const afterText = normalizedTextContent.substring(exactIndex + exact.length, exactIndex + exact.length + suffix.length);
           suffixMatch = normalizeText(afterText).startsWith(suffix);
-          console.log('Suffix check:', JSON.stringify(afterText), 'starts with', JSON.stringify(suffix), '=', suffixMatch);
         }
         
         if (prefixMatch && suffixMatch) {
-          console.log('✅ Match found! Creating range...');
           
           // Create range - need to use original text positions
           const range = document.createRange();
@@ -816,32 +770,13 @@
           // Verify the range content matches
           const rangeText = range.toString();
           if (isTextMatch(rangeText, selector.exact)) {
-            console.log('✅ Range verification successful');
             return range;
-          } else {
-            console.log('❌ Range verification failed:', JSON.stringify(rangeText), 'vs', JSON.stringify(selector.exact));
-          }
+          } 
         }
       }
     }
     
-    console.log('❌ No match found for TextQuoteSelector');
     return null;
-  }
-
-  // Debug function to analyze Unicode text issues
-  function debugUnicodeText(text: string, label: string = 'Text') {
-    if (!text) {
-      console.log(`${label}: (empty)`);
-      return;
-    }
-    
-    const normalized = normalizeText(text);
-    console.log(`${label}:`, JSON.stringify(text));
-    console.log(`${label} (normalized):`, JSON.stringify(normalized));
-    console.log(`${label} chars:`, [...text].map(c => `${c} (U+${c.charCodeAt(0).toString(16).padStart(4, '0')})`));
-    console.log(`${label} length:`, text.length);
-    console.log(`${label} normalized length:`, normalized.length);
   }
 
   // Function to resolve TextPositionSelector to range with Unicode support
@@ -850,13 +785,11 @@
     const start = selector.start;
     const end = selector.end;
     
-    console.log('Resolving TextPositionSelector:', { start, end });
     
     const textContent = root.textContent || '';
     const normalizedTextContent = normalizeText(textContent);
     
     if (start < 0 || end > normalizedTextContent.length || start >= end) {
-      console.log('❌ TextPositionSelector: Invalid range');
       return null;
     }
     
@@ -894,7 +827,6 @@
     }
     
     if (startNode && endNode) {
-      console.log('✅ TextPositionSelector: Found nodes');
       const range = document.createRange();
       range.setStart(startNode, startOffset);
       range.setEnd(endNode, endOffset);
@@ -903,18 +835,12 @@
       const rangeText = range.toString();
       const expectedText = normalizedTextContent.substring(start, end);
       
-      console.log('Range text:', JSON.stringify(rangeText));
-      console.log('Expected text:', JSON.stringify(expectedText));
       
       if (isTextMatch(rangeText, expectedText)) {
-        console.log('✅ TextPositionSelector verification successful');
         return range;
-      } else {
-        console.log('❌ TextPositionSelector verification failed');
-      }
+      } 
     }
     
-    console.log('❌ TextPositionSelector: No valid range found');
     return null;
   }
 
@@ -1062,26 +988,19 @@
     // First, clear all existing highlights
     clearAllHighlights();
     
-    console.log(`🎯 Highlighting ${highlights.length} annotations...`);
     
     // Then highlight each annotation without clearing
     let successCount = 0;
     highlights.forEach((highlight: any, index: number) => {
       if (highlight.text) {
-        console.log(`\n--- Highlighting annotation ${index + 1}/${highlights.length} ---`);
-        debugUnicodeText(highlight.text, 'Target text');
         
         const success = highlightTextWithSelectors(highlight.text, highlight.selectionData);
         if (success) {
           successCount++;
-          console.log(`✅ Annotation ${index + 1} highlighted successfully`);
-        } else {
-          console.log(`❌ Annotation ${index + 1} failed to highlight`);
-        }
+        } 
       }
     });
-    
-    console.log(`🎯 Successfully highlighted ${successCount} out of ${highlights.length} annotations`);
+
   }
 
   // Enhanced highlightRange function with better Unicode support
@@ -1092,12 +1011,9 @@
       
       // Check if the range is valid
       if (clonedRange.collapsed) {
-        console.log('❌ Cannot highlight collapsed range');
         return;
       }
       
-      const rangeText = clonedRange.toString();
-      console.log('Highlighting range with text:', JSON.stringify(rangeText));
       
       // Extract contents and wrap in highlight span
       const contents = clonedRange.extractContents();
@@ -1111,7 +1027,6 @@
       // Insert the highlighted content
       clonedRange.insertNode(span);
       
-      console.log('✅ Range highlighted successfully');
     } catch (error) {
       console.error('❌ Error highlighting range:', error);
     }
@@ -1242,6 +1157,14 @@
         sendAuthToIframe();
         break;
 
+      case "REQUEST_PAGE_TITLE":
+        // Iframe is requesting the page title
+        iframe.contentWindow?.postMessage({
+          type: "PAGE_TITLE_RESPONSE",
+          payload: { title: document.title }
+        }, "*");
+        break;
+
       case "HIGHLIGHT_TEXT":
         // Clear existing highlights and highlight single text (legacy)
         clearAllHighlights();
@@ -1348,50 +1271,4 @@
     clearStoredSelection();
   });
 
-  // Debug function to check highlight state
-  function debugHighlights() {
-    const highlights = document.querySelectorAll('.crossie-highlight');
-    console.log(`Current highlights: ${highlights.length}`);
-    highlights.forEach((highlight, index) => {
-      console.log(`Highlight ${index + 1}:`, highlight.textContent);
-    });
-  }
-
-  // Debug function to test scroll functionality
-  function debugScrollToHighlight(text: string) {
-    console.log('🔍 Debug scroll test for text:', JSON.stringify(text));
-    
-    const allHighlights = document.querySelectorAll('.crossie-highlight');
-    console.log(`Found ${allHighlights.length} highlights on page`);
-    
-    allHighlights.forEach((highlight, index) => {
-      const highlightText = highlight.textContent || '';
-      console.log(`Highlight ${index + 1}:`, JSON.stringify(highlightText));
-      
-      if (normalizeText(highlightText) === normalizeText(text)) {
-        console.log(`✅ Found matching highlight ${index + 1}, scrolling...`);
-        scrollToElement(highlight);
-        return;
-      }
-    });
-  }
-
-  // Debug function to check annotation selection data
-  function debugAnnotationData() {
-    console.log('📊 Current annotation debugging info:');
-    console.log('Stored selection data:', storedSelectionData);
-    console.log('Current highlights:', document.querySelectorAll('.crossie-highlight').length);
-    console.log('Sidebar open:', isSidebarOpen);
-    
-    // Test Unicode normalization
-    if (storedSelectionData?.selectedText) {
-      debugUnicodeText(storedSelectionData.selectedText, 'Stored selection');
-    }
-  }
-
-  // Make debug functions available globally for testing
-  (window as any).debugHighlights = debugHighlights;
-  (window as any).debugScrollToHighlight = debugScrollToHighlight;
-  (window as any).debugAnnotationData = debugAnnotationData;
-  (window as any).debugUnicodeText = debugUnicodeText;
 })();

@@ -39,7 +39,13 @@ interface CSSSelector {
 interface TextSelectionData {
   selectedText: string;
   // W3C-style selectors for robust anchoring
-  selectors: Array<TextQuoteSelector | TextPositionSelector | RangeSelector | XPathSelector | CSSSelector>;
+  selectors: Array<
+    | TextQuoteSelector
+    | TextPositionSelector
+    | RangeSelector
+    | XPathSelector
+    | CSSSelector
+  >;
   // Enhanced fields for precise text location
   startNodePath?: string; // Path to the start text node
   endNodePath?: string; // Path to the end text node
@@ -109,7 +115,9 @@ interface ParentMessage {
     | "HIGHLIGHT_TEXT"
     | "HIGHLIGHT_ANNOTATIONS"
     | "CLEAR_SELECTION"
-    | "SCROLL_TO_HIGHLIGHT";
+    | "SCROLL_TO_HIGHLIGHT"
+    | "REQUEST_PAGE_TITLE"
+    | "PAGE_TITLE_RESPONSE";
   payload?: any;
 }
 
@@ -161,19 +169,34 @@ const getRelativeTime = (timestamp: Date): string => {
   return timestamp.toLocaleDateString();
 };
 
+// RLS error handling utility
+const handleRLSError = (error: any, context: string) => {
+  if (error?.code === "PGRST116") {
+    console.error(`RLS Permission denied in ${context}:`, error);
+    return "You don't have permission to access this resource";
+  } else if (error?.code === "PGRST301") {
+    console.error(`RLS Row not found in ${context}:`, error);
+    return "Resource not found or access denied";
+  }
+  return `Error in ${context}: ${error?.message || "Unknown error"}`;
+};
+
 // Utility function to truncate text for display
-const truncateText = (text: string, maxLength: number = 280): { text: string; isTruncated: boolean } => {
+const truncateText = (
+  text: string,
+  maxLength: number = 280
+): { text: string; isTruncated: boolean } => {
   if (text.length <= maxLength) {
     return { text, isTruncated: false };
   }
-  
+
   // Find the last space before maxLength to avoid cutting words
-  const lastSpace = text.lastIndexOf(' ', maxLength);
+  const lastSpace = text.lastIndexOf(" ", maxLength);
   const cutoffPoint = lastSpace > 0 ? lastSpace : maxLength;
-  
+
   return {
-    text: text.substring(0, cutoffPoint) + '...',
-    isTruncated: true
+    text: text.substring(0, cutoffPoint) + "...",
+    isTruncated: true,
   };
 };
 
@@ -184,7 +207,7 @@ const AnnotationContent: React.FC<{
   onToggleExpand: () => void;
 }> = ({ content, isExpanded, onToggleExpand }) => {
   const { text, isTruncated } = truncateText(content);
-  
+
   return (
     <div className="space-y-1">
       <p className="text-sm break-words whitespace-pre-wrap">
@@ -195,7 +218,7 @@ const AnnotationContent: React.FC<{
           onClick={onToggleExpand}
           className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
         >
-          {isExpanded ? 'Show less' : 'Show more'}
+          {isExpanded ? "Show less" : "Show more"}
         </button>
       )}
     </div>
@@ -210,15 +233,17 @@ const HighlightedTextContent: React.FC<{
   onScrollToHighlight: () => void;
 }> = ({ highlightedText, isExpanded, onToggleExpand, onScrollToHighlight }) => {
   const { text, isTruncated } = truncateText(highlightedText, 500); // Shorter limit for highlights
-  
+
   return (
     <div className="space-y-2">
-      <div 
+      <div
         className="bg-yellow-200 text-black px-3 py-2 rounded-lg text-sm font-medium cursor-pointer hover:bg-yellow-300 hover:shadow-md transition-all duration-200 border border-yellow-300"
         onClick={onScrollToHighlight}
         title="Click to scroll to highlight on page"
       >
-        <span className="break-words">"{isExpanded ? highlightedText : text}"</span>
+        <span className="break-words">
+          "{isExpanded ? highlightedText : text}"
+        </span>
       </div>
       {isTruncated && (
         <button
@@ -228,7 +253,7 @@ const HighlightedTextContent: React.FC<{
           }}
           className="text-xs text-yellow-600 hover:text-yellow-500 transition-colors ml-3"
         >
-          {isExpanded ? 'Show less' : 'Show more'}
+          {isExpanded ? "Show less" : "Show more"}
         </button>
       )}
     </div>
@@ -239,17 +264,17 @@ const HighlightedTextContent: React.FC<{
 const highlightTextOnPage = (annotations: Annotation[]) => {
   // Extract all text selections that need highlighting
   const highlights = annotations
-    .filter(ann => ann.annotationType === "text" && ann.highlightedText)
-    .map(ann => ({
+    .filter((ann) => ann.annotationType === "text" && ann.highlightedText)
+    .map((ann) => ({
       id: ann.id,
       text: ann.highlightedText,
-      selectionData: ann.selectionData
+      selectionData: ann.selectionData,
     }));
-  
+
   // Send to parent window to handle highlighting
   sendToParent({
     type: "HIGHLIGHT_ANNOTATIONS",
-    payload: { highlights }
+    payload: { highlights },
   });
 };
 
@@ -268,7 +293,8 @@ export default function Crossie() {
   const [loadingAnnotations, setLoadingAnnotations] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
   const [isTabActive, setIsTabActive] = useState(!document.hidden);
-  const [textAnnotationRequest, setTextAnnotationRequest] = useState<TextSelectionData | null>(null);
+  const [textAnnotationRequest, setTextAnnotationRequest] =
+    useState<TextSelectionData | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [currentPage, setCurrentPage] = useState<Page | null>(null);
@@ -282,7 +308,6 @@ export default function Crossie() {
   const [authInitialized, setAuthInitialized] = useState(false);
 
   const annotationsRef = useRef<HTMLDivElement>(null);
-  const realtimeChannelRef = useRef<any>(null);
   const optimisticCounterRef = useRef(0);
   // Track optimistic IDs to real IDs mapping
   const optimisticToRealIdRef = useRef<Map<string, string>>(new Map());
@@ -294,19 +319,17 @@ export default function Crossie() {
 
   // Function to handle toggling content expansion
   const toggleAnnotationExpansion = useCallback((annotationId: string) => {
-    setAnnotations(current =>
-      current.map(ann =>
-        ann.id === annotationId
-          ? { ...ann, isExpanded: !ann.isExpanded }
-          : ann
+    setAnnotations((current) =>
+      current.map((ann) =>
+        ann.id === annotationId ? { ...ann, isExpanded: !ann.isExpanded } : ann
       )
     );
   }, []);
 
   // Function to handle toggling highlighted text expansion
   const toggleHighlightExpansion = useCallback((annotationId: string) => {
-    setAnnotations(current =>
-      current.map(ann =>
+    setAnnotations((current) =>
+      current.map((ann) =>
         ann.id === annotationId
           ? { ...ann, isHighlightExpanded: !ann.isHighlightExpanded }
           : ann
@@ -316,19 +339,30 @@ export default function Crossie() {
 
   // Update useEffect to trigger highlighting when annotations change
   useEffect(() => {
-    if (annotations.length > 0 && !annotations.some(ann => ann.isOptimistic)) {
+    if (
+      annotations.length > 0 &&
+      !annotations.some((ann) => ann.isOptimistic)
+    ) {
       // Send highlight request to parent
       highlightTextOnPage(annotations);
     }
   }, [annotations]);
 
+  // State to track page title requests
+  const [pageTitle, setPageTitle] = useState<string>("Untitled Document");
+  const [titleRequestPending, setTitleRequestPending] = useState<boolean>(false);
+
   useEffect(() => {
     sendToParent({ type: "REQUEST_AUTH_STATE" });
+    sendToParent({ type: "REQUEST_PAGE_TITLE" });
+    setTitleRequestPending(true);
     const handleMessage = async (event: MessageEvent) => {
       if (event.data?.type === "AUTH_STATE_UPDATE") {
         const { authData, profile } = event.data.payload || {};
+
         if (authData?.access_token) {
-          await supabaseAuthClient.setAuth(authData.access_token);
+          await supabaseAuthClient.setAuth(authData);
+
           setAuthState({
             user: authData.user,
             profile,
@@ -364,6 +398,11 @@ export default function Crossie() {
           setTextAnnotationRequest(selectionData);
           setIsVisible(true);
         }
+      }
+      if (event.data?.type === "PAGE_TITLE_RESPONSE") {
+        const { title } = event.data.payload || {};
+        setPageTitle(title || "Untitled Document");
+        setTitleRequestPending(false);
       }
     };
     window.addEventListener("message", handleMessage);
@@ -412,38 +451,28 @@ export default function Crossie() {
 
   useEffect(() => {
     if (!authState.authenticated || !authState.user) return;
+
     const fetchProjects = async () => {
       try {
-        const userId = authState.user!.id;
-        const { data: ownedProjects, error: ownedError } = await supabase
+        // With RLS, this query will automatically only return accessible projects
+        const { data: allProjects, error } = await supabase
           .from("projects")
           .select(
             "id, name, description, is_team_project, created_by, created_at"
           )
-          .eq("created_by", userId);
-        if (ownedError) throw ownedError;
-        const { data: memberProjects, error: memberError } = await supabase
-          .from("project_members")
-          .select(
-            "project:projects ( id, name, description, is_team_project, created_by, created_at )"
-          )
-          .eq("user_id", userId);
-        if (memberError) throw memberError;
-        const allProjects = [
-          ...(ownedProjects || []),
-          ...(memberProjects || [])
-            .map((mp: any) => mp.project)
-            .filter(Boolean),
-        ];
-        const uniqueProjects = allProjects.filter(
-          (project, index, self) =>
-            index === self.findIndex((p) => p.id === project.id)
-        );
-        const sortedProjects = uniqueProjects.sort(
-          (a, b) =>
-            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        );
-        const mappedProjects = sortedProjects.map((p: any) => ({
+          .order("created_at", { ascending: false });
+
+        if (error) {
+          console.error("Error fetching projects:", error);
+          if (error.code === "PGRST116") {
+            console.error("Permission denied when fetching projects");
+            setProjects([]);
+            return;
+          }
+          throw error;
+        }
+
+        const mappedProjects = (allProjects || []).map((p: any) => ({
           id: p.id,
           name: p.name,
           description: p.description,
@@ -451,9 +480,11 @@ export default function Crossie() {
           createdBy: p.created_by,
           createdAt: new Date(p.created_at),
         }));
+
         setProjects(mappedProjects);
       } catch (error) {
         console.error("Error fetching projects:", error);
+        setProjects([]);
       }
     };
     fetchProjects();
@@ -483,7 +514,9 @@ export default function Crossie() {
     if (!authState.user || !newProject.name) return;
     try {
       const userId = authState.user.id;
-      const { data, error } = await supabase
+
+      // Create project
+      const { data: projectData, error: projectError } = await supabase
         .from("projects")
         .insert({
           name: newProject.name,
@@ -493,38 +526,58 @@ export default function Crossie() {
         })
         .select()
         .single();
-      if (error) throw error;
-      if (authState.user) {
-        await supabase.from("project_members").insert({
-          project_id: data.id,
-          user_id: authState.user.id,
+
+      if (projectError) throw projectError;
+
+      // Add creator as member
+      const { error: memberError } = await supabase
+        .from("project_members")
+        .insert({
+          project_id: projectData.id,
+          user_id: userId,
           role: "owner",
         });
+
+      if (memberError) {
+        console.error("Error adding creator as member:", memberError);
+        // Rollback project creation if member addition fails
+        await supabase.from("projects").delete().eq("id", projectData.id);
+        throw memberError;
       }
+
+      // Add page relationship if current page exists
       if (currentPage) {
-        await supabase.from("project_pages").insert({
-          project_id: data.id,
-          page_id: currentPage.id,
-          added_by: userId,
-        });
+        const { error: pageError } = await supabase
+          .from("project_pages")
+          .insert({
+            project_id: projectData.id,
+            page_id: currentPage.id,
+            added_by: userId,
+          });
+
+        if (pageError) {
+          console.error("Error linking page to project:", pageError);
+          // Don't fail the entire operation for page linking errors
+        }
       }
+
       const newProjectObj: Project = {
-        id: data.id,
-        name: data.name,
-        description: data.description,
-        isTeamProject: data.is_team_project,
-        createdBy: data.created_by,
-        createdAt: new Date(data.created_at),
+        id: projectData.id,
+        name: projectData.name,
+        description: projectData.description,
+        isTeamProject: projectData.is_team_project,
+        createdBy: projectData.created_by,
+        createdAt: new Date(projectData.created_at),
       };
+
       setProjects([newProjectObj, ...projects]);
       setSelectedProject(newProjectObj);
       setShowCreateProject(false);
       setNewProject({ name: "", description: "", isTeamProject: false });
       saveSelectedProject(newProjectObj, url);
-      if (currentPage) setupRealtimeSubscription(data.id, currentPage.id);
     } catch (error) {
       console.error("Error creating project:", error);
-      alert("Failed to create project");
+      alert("Failed to create project. Please try again.");
     }
   };
 
@@ -549,7 +602,6 @@ export default function Crossie() {
           });
         }
         await loadAnnotations(project.id, currentPage.id);
-        setupRealtimeSubscription(project.id, currentPage.id);
       } catch (error) {
         console.error("Error selecting project:", error);
       }
@@ -559,6 +611,19 @@ export default function Crossie() {
   const loadAnnotations = async (projectId: string, pageId: string) => {
     setLoadingAnnotations(true);
     try {
+      // First verify user has access to the project
+      const { data: projectAccess } = await supabase
+        .from("projects")
+        .select("id")
+        .eq("id", projectId)
+        .maybeSingle();
+
+      if (!projectAccess) {
+        console.error("User does not have access to this project");
+        setAnnotations([]);
+        return;
+      }
+
       const { data: annotationsData, error: annotationsError } = await supabase
         .from("annotations")
         .select(
@@ -570,6 +635,15 @@ export default function Crossie() {
 
       if (annotationsError) {
         console.error("Error fetching annotations:", annotationsError);
+        // Handle RLS permission errors gracefully
+        if (annotationsError.code === "PGRST116") {
+          console.error(
+            "Permission denied - user may not have access to this project"
+          );
+          setAnnotations([]);
+          return;
+        }
+        throw annotationsError;
       } else if (annotationsData) {
         const mapped = annotationsData.map((a: any) => ({
           id: a.id,
@@ -579,28 +653,35 @@ export default function Crossie() {
           annotationType: a.annotation_type,
           highlightedText: a.highlighted_text,
           // Parse selection data from coordinates field
-          selectionData: a.coordinates?.type === 'text-selection' ? {
-            selectedText: a.highlighted_text || a.coordinates.selectedText || '',
-            selectors: a.coordinates.selectors || [],
-            startNodePath: a.coordinates.startNodePath,
-            endNodePath: a.coordinates.endNodePath,
-            startOffset: a.coordinates.startOffset,
-            endOffset: a.coordinates.endOffset,
-            parentSelector: a.coordinates.parentSelector,
-            precedingText: a.coordinates.precedingText,
-            followingText: a.coordinates.followingText,
-            rangeStartOffset: a.coordinates.rangeStartOffset,
-            rangeEndOffset: a.coordinates.rangeEndOffset,
-            parentTextHash: a.coordinates.parentTextHash,
-            textContent: a.coordinates.textContent,
-            documentUrl: a.coordinates.documentUrl,
-            timestamp: a.coordinates.timestamp
-          } : undefined,
+          selectionData:
+            a.coordinates?.type === "text-selection"
+              ? {
+                  selectedText:
+                    a.highlighted_text || a.coordinates.selectedText || "",
+                  selectors: a.coordinates.selectors || [],
+                  startNodePath: a.coordinates.startNodePath,
+                  endNodePath: a.coordinates.endNodePath,
+                  startOffset: a.coordinates.startOffset,
+                  endOffset: a.coordinates.endOffset,
+                  parentSelector: a.coordinates.parentSelector,
+                  precedingText: a.coordinates.precedingText,
+                  followingText: a.coordinates.followingText,
+                  rangeStartOffset: a.coordinates.rangeStartOffset,
+                  rangeEndOffset: a.coordinates.rangeEndOffset,
+                  parentTextHash: a.coordinates.parentTextHash,
+                  textContent: a.coordinates.textContent,
+                  documentUrl: a.coordinates.documentUrl,
+                  timestamp: a.coordinates.timestamp,
+                }
+              : undefined,
           isExpanded: false,
-          isHighlightExpanded: false
+          isHighlightExpanded: false,
         }));
         setAnnotations(mapped);
       }
+    } catch (error) {
+      console.error("Error in loadAnnotations:", error);
+      setAnnotations([]);
     } finally {
       setLoadingAnnotations(false);
     }
@@ -621,156 +702,11 @@ export default function Crossie() {
     return () => document.removeEventListener("click", handleClickOutside);
   }, [showProjectSelector]);
 
-  const setupRealtimeSubscription = useCallback(
-    (projectId: string, pageId: string) => {
-      if (realtimeChannelRef.current)
-        supabase.removeChannel(realtimeChannelRef.current);
-
-      const channel = supabase
-        .channel(`annotations-project-${projectId}-page-${pageId}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "INSERT",
-            schema: "public",
-            table: "annotations",
-            filter: `project_id=eq.${projectId}`,
-          },
-          async (payload) => {
-            const annotation = payload.new;
-            if (!annotation || annotation.page_id !== pageId) return;
-
-            // Check if we already have this annotation (from immediate insert response)
-            setAnnotations((current) => {
-              if (current.find((ann) => ann.id === annotation.id)) {
-                return current;
-              }
-
-              // If not, fetch profile and add it
-              supabase
-                .from("profiles")
-                .select("id, username")
-                .eq("id", annotation.user_id)
-                .single()
-                .then(({ data: profileData }) => {
-                  const newAnnotation: Annotation = {
-                    id: annotation.id,
-                    content: annotation.content,
-                    timestamp: new Date(annotation.created_at),
-                    user: profileData || {
-                      id: annotation.user_id,
-                      username: "Anonymous",
-                    },
-                    annotationType: annotation.annotation_type,
-                    highlightedText: annotation.highlighted_text,
-                    // Parse selection data from coordinates field
-                    selectionData: annotation.coordinates?.type === 'text-selection' ? {
-                      selectedText: annotation.highlighted_text || annotation.coordinates.selectedText || '',
-                      selectors: annotation.coordinates.selectors || [],
-                      startNodePath: annotation.coordinates.startNodePath,
-                      endNodePath: annotation.coordinates.endNodePath,
-                      startOffset: annotation.coordinates.startOffset,
-                      endOffset: annotation.coordinates.endOffset,
-                      parentSelector: annotation.coordinates.parentSelector,
-                      precedingText: annotation.coordinates.precedingText,
-                      followingText: annotation.coordinates.followingText,
-                      rangeStartOffset: annotation.coordinates.rangeStartOffset,
-                      rangeEndOffset: annotation.coordinates.rangeEndOffset,
-                      parentTextHash: annotation.coordinates.parentTextHash,
-                      textContent: annotation.coordinates.textContent,
-                      documentUrl: annotation.coordinates.documentUrl,
-                      timestamp: annotation.coordinates.timestamp
-                    } : undefined,
-                    isExpanded: false,
-                    isHighlightExpanded: false
-                  };
-
-                  setAnnotations((cur) => {
-                    // Check again if annotation exists
-                    if (cur.find((ann) => ann.id === annotation.id)) {
-                      return cur;
-                    }
-                    // Remove any remaining optimistic annotations that match
-                    const filtered = cur.filter((ann) => {
-                      if (!ann.isOptimistic) return true;
-                      return !(
-                        ann.content === annotation.content &&
-                        ann.user.id === annotation.user_id &&
-                        ann.highlightedText === annotation.highlighted_text
-                      );
-                    });
-                    return [newAnnotation, ...filtered];
-                  });
-                });
-
-              return current;
-            });
-          }
-        )
-        .on(
-          "postgres_changes",
-          {
-            event: "UPDATE",
-            schema: "public",
-            table: "annotations",
-            filter: `project_id=eq.${projectId}`,
-          },
-          (payload) => {
-            const annotation = payload.new;
-            if (!annotation || annotation.page_id !== pageId) return;
-
-            setAnnotations((current) =>
-              current.map((ann) =>
-                ann.id === annotation.id
-                  ? { ...ann, content: annotation.content }
-                  : ann
-              )
-            );
-          }
-        )
-        .on(
-          "postgres_changes",
-          {
-            event: "DELETE",
-            schema: "public",
-            table: "annotations",
-            filter: `project_id=eq.${projectId}`,
-          },
-          (payload) => {
-            const annotation = payload.old;
-            if (!annotation || annotation.page_id !== pageId) return;
-
-            setAnnotations((current) =>
-              current.filter((ann) => ann.id !== annotation.id)
-            );
-          }
-        )
-        .subscribe();
-
-      realtimeChannelRef.current = channel;
-      return channel;
-    },
-    []
-  );
-
   useEffect(() => {
     if (!selectedProject || !currentPage || !authInitialized) return;
 
     loadAnnotations(selectedProject.id, currentPage.id);
-    setupRealtimeSubscription(selectedProject.id, currentPage.id);
-
-    return () => {
-      if (realtimeChannelRef.current) {
-        supabase.removeChannel(realtimeChannelRef.current);
-        realtimeChannelRef.current = null;
-      }
-    };
-  }, [
-    selectedProject,
-    currentPage,
-    authInitialized,
-    setupRealtimeSubscription,
-  ]);
+  }, [selectedProject, currentPage, authInitialized]);
 
   const send = useCallback(async () => {
     if (
@@ -786,7 +722,7 @@ export default function Crossie() {
     const isTextAnnotation = !!textAnnotationRequest;
     const highlightedText = textAnnotationRequest?.selectedText;
     const selectionData = textAnnotationRequest as TextSelectionData;
-    
+
     const optimisticId = `optimistic-${Date.now()}-${++optimisticCounterRef.current}`;
     const optimisticAnnotation: Annotation = {
       id: optimisticId,
@@ -799,9 +735,9 @@ export default function Crossie() {
       optimisticId,
       selectionData: isTextAnnotation ? selectionData : undefined,
       isExpanded: false,
-      isHighlightExpanded: false
+      isHighlightExpanded: false,
     };
-    
+
     setAnnotations((cur) => [optimisticAnnotation, ...cur]);
     const annotationText = txt.trim();
     setTxt("");
@@ -810,13 +746,22 @@ export default function Crossie() {
     try {
       let page = currentPage;
       let pageWasJustCreated = false;
-
+      
       // If currentPage is null, create the page now
       if (!page) {
+        // Request page title if we haven't already
+        if (!titleRequestPending) {
+          setTitleRequestPending(true);
+          sendToParent({ type: "REQUEST_PAGE_TITLE" });
+          
+          // Wait a bit for the title response
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
         const urlHash = btoa(url).replace(/[^a-zA-Z0-9]/g, "");
         const { data: newPage, error: insertError } = await supabase
           .from("pages")
-          .insert({ url, url_hash: urlHash, title: document.title })
+          .insert({ url, url_hash: urlHash, title: pageTitle })
           .select()
           .single();
         if (insertError) throw insertError;
@@ -848,24 +793,27 @@ export default function Crossie() {
       }
 
       // Prepare coordinates field with enhanced selection data
-      const coordinates = isTextAnnotation && selectionData ? {
-        type: 'text-selection',
-        selectedText: selectionData.selectedText,
-        selectors: selectionData.selectors,
-        startNodePath: selectionData.startNodePath,
-        endNodePath: selectionData.endNodePath,
-        startOffset: selectionData.startOffset,
-        endOffset: selectionData.endOffset,
-        parentSelector: selectionData.parentSelector,
-        precedingText: selectionData.precedingText,
-        followingText: selectionData.followingText,
-        rangeStartOffset: selectionData.rangeStartOffset,
-        rangeEndOffset: selectionData.rangeEndOffset,
-        parentTextHash: selectionData.parentTextHash,
-        textContent: selectionData.textContent,
-        documentUrl: selectionData.documentUrl,
-        timestamp: selectionData.timestamp
-      } : null; // Use null instead of undefined to avoid empty objects
+      const coordinates =
+        isTextAnnotation && selectionData
+          ? {
+              type: "text-selection",
+              selectedText: selectionData.selectedText,
+              selectors: selectionData.selectors,
+              startNodePath: selectionData.startNodePath,
+              endNodePath: selectionData.endNodePath,
+              startOffset: selectionData.startOffset,
+              endOffset: selectionData.endOffset,
+              parentSelector: selectionData.parentSelector,
+              precedingText: selectionData.precedingText,
+              followingText: selectionData.followingText,
+              rangeStartOffset: selectionData.rangeStartOffset,
+              rangeEndOffset: selectionData.rangeEndOffset,
+              parentTextHash: selectionData.parentTextHash,
+              textContent: selectionData.textContent,
+              documentUrl: selectionData.documentUrl,
+              timestamp: selectionData.timestamp,
+            }
+          : null; // Use null instead of undefined to avoid empty objects
 
       // Insert annotation and get the created record with profile info
       const { data: insertedAnnotation, error: insertErr } = await supabase
@@ -877,7 +825,7 @@ export default function Crossie() {
           content: annotationText,
           annotation_type: "text",
           highlighted_text: highlightedText,
-          coordinates: coordinates // Store selection data here
+          coordinates: coordinates, // Store selection data here
         })
         .select(
           "id, content, created_at, user_id, annotation_type, highlighted_text, image_data, coordinates, user:profiles ( id, username )"
@@ -892,29 +840,39 @@ export default function Crossie() {
           id: insertedAnnotation.id,
           content: insertedAnnotation.content,
           timestamp: new Date(insertedAnnotation.created_at),
-          user: (Array.isArray(insertedAnnotation.user) ? insertedAnnotation.user[0] : insertedAnnotation.user) || authState.profile,
+          user:
+            (Array.isArray(insertedAnnotation.user)
+              ? insertedAnnotation.user[0]
+              : insertedAnnotation.user) || authState.profile,
           annotationType: insertedAnnotation.annotation_type,
           highlightedText: insertedAnnotation.highlighted_text,
           // Parse selection data from coordinates field
-          selectionData: insertedAnnotation.coordinates?.type === 'text-selection' ? {
-            selectedText: insertedAnnotation.highlighted_text || insertedAnnotation.coordinates.selectedText || '',
-            selectors: insertedAnnotation.coordinates.selectors || [],
-            startNodePath: insertedAnnotation.coordinates.startNodePath,
-            endNodePath: insertedAnnotation.coordinates.endNodePath,
-            startOffset: insertedAnnotation.coordinates.startOffset,
-            endOffset: insertedAnnotation.coordinates.endOffset,
-            parentSelector: insertedAnnotation.coordinates.parentSelector,
-            precedingText: insertedAnnotation.coordinates.precedingText,
-            followingText: insertedAnnotation.coordinates.followingText,
-            rangeStartOffset: insertedAnnotation.coordinates.rangeStartOffset,
-            rangeEndOffset: insertedAnnotation.coordinates.rangeEndOffset,
-            parentTextHash: insertedAnnotation.coordinates.parentTextHash,
-            textContent: insertedAnnotation.coordinates.textContent,
-            documentUrl: insertedAnnotation.coordinates.documentUrl,
-            timestamp: insertedAnnotation.coordinates.timestamp
-          } : undefined,
+          selectionData:
+            insertedAnnotation.coordinates?.type === "text-selection"
+              ? {
+                  selectedText:
+                    insertedAnnotation.highlighted_text ||
+                    insertedAnnotation.coordinates.selectedText ||
+                    "",
+                  selectors: insertedAnnotation.coordinates.selectors || [],
+                  startNodePath: insertedAnnotation.coordinates.startNodePath,
+                  endNodePath: insertedAnnotation.coordinates.endNodePath,
+                  startOffset: insertedAnnotation.coordinates.startOffset,
+                  endOffset: insertedAnnotation.coordinates.endOffset,
+                  parentSelector: insertedAnnotation.coordinates.parentSelector,
+                  precedingText: insertedAnnotation.coordinates.precedingText,
+                  followingText: insertedAnnotation.coordinates.followingText,
+                  rangeStartOffset:
+                    insertedAnnotation.coordinates.rangeStartOffset,
+                  rangeEndOffset: insertedAnnotation.coordinates.rangeEndOffset,
+                  parentTextHash: insertedAnnotation.coordinates.parentTextHash,
+                  textContent: insertedAnnotation.coordinates.textContent,
+                  documentUrl: insertedAnnotation.coordinates.documentUrl,
+                  timestamp: insertedAnnotation.coordinates.timestamp,
+                }
+              : undefined,
           isExpanded: false,
-          isHighlightExpanded: false
+          isHighlightExpanded: false,
         };
 
         setAnnotations((cur) =>
@@ -928,9 +886,8 @@ export default function Crossie() {
       // Clear the stored selection after successful annotation
       sendToParent({ type: "CLEAR_SELECTION" });
 
-      // If page was just created, update the subscription and immediately load annotations
+      // If page was just created, immediately load annotations
       if (pageWasJustCreated) {
-        setupRealtimeSubscription(selectedProject.id, page.id);
         await loadAnnotations(selectedProject.id, page.id);
       }
 
@@ -945,11 +902,9 @@ export default function Crossie() {
             : ann
         )
       );
-      let errorMsg = "Failed to send annotation";
-      if (error && typeof error === "object" && "message" in error)
-        errorMsg = `Failed to send annotation: ${
-          (error as { message: string }).message
-        }`;
+
+      // Handle RLS-specific errors
+      const errorMsg = handleRLSError(error, "sending annotation");
       alert(errorMsg);
     } finally {
       setSending(false);
@@ -962,7 +917,6 @@ export default function Crossie() {
     sending,
     textAnnotationRequest,
     url,
-    setupRealtimeSubscription,
   ]);
 
   // Function to scroll to highlighted text
@@ -970,21 +924,18 @@ export default function Crossie() {
     if (annotation.selectionData) {
       sendToParent({
         type: "SCROLL_TO_HIGHLIGHT",
-        payload: { selectionData: annotation.selectionData }
+        payload: { selectionData: annotation.selectionData },
       });
     } else if (annotation.highlightedText) {
       // Fallback: try to scroll using just the highlighted text
-      console.log('No selection data, trying text-based scroll fallback');
       sendToParent({
         type: "SCROLL_TO_HIGHLIGHT",
-        payload: { 
-          selectionData: { 
-            selectedText: annotation.highlightedText 
-          } 
-        }
+        payload: {
+          selectionData: {
+            selectedText: annotation.highlightedText,
+          },
+        },
       });
-    } else {
-      console.log('No selection data or highlighted text available for scrolling');
     }
   }, []);
 
@@ -1421,14 +1372,18 @@ export default function Crossie() {
                             <HighlightedTextContent
                               highlightedText={ann.highlightedText}
                               isExpanded={ann.isHighlightExpanded || false}
-                              onToggleExpand={() => toggleHighlightExpansion(ann.id)}
+                              onToggleExpand={() =>
+                                toggleHighlightExpansion(ann.id)
+                              }
                               onScrollToHighlight={() => scrollToHighlight(ann)}
                             />
                           )}
                         <AnnotationContent
                           content={ann.content}
                           isExpanded={ann.isExpanded || false}
-                          onToggleExpand={() => toggleAnnotationExpansion(ann.id)}
+                          onToggleExpand={() =>
+                            toggleAnnotationExpansion(ann.id)
+                          }
                         />
                       </div>
                     )}

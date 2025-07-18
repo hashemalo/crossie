@@ -5,67 +5,71 @@ class SupabaseAuthClient {
   private client: SupabaseClient;
   private url = "https://sxargqkknhkcfvhbttrh.supabase.co";
   private anonKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4YXJncWtrbmhrY2Z2aGJ0dHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MzEyMDAsImV4cCI6MjA2NjMwNzIwMH0.Q70cLGf69Al2prKMDSkCTnCGTuiKGY-MFK2tQ1g2T-k";
-  private currentToken: string | null = null;
 
   constructor() {
-    // Create a single client instance with custom fetch
+    // Create a standard client instance with proper auth configuration
     this.client = createClient(this.url, this.anonKey, {
       auth: {
         persistSession: false,
-        autoRefreshToken: false,
+        autoRefreshToken: true, // Enable automatic token refresh
         detectSessionInUrl: false,
         storage: {
           getItem: () => null,
           setItem: () => {},
           removeItem: () => {}
         }
-      },
-      global: {
-        fetch: this.customFetch.bind(this)
       }
     });
   }
 
-  // Custom fetch that injects our auth token
-  private customFetch(url: RequestInfo | URL, options: RequestInit = {}): Promise<Response> {
-    const headers = new Headers(options.headers || {});
-    
-    // If we have a token and this is a request to our Supabase instance, add auth header
-    if (this.currentToken && url.toString().includes(this.url)) {
-      headers.set('Authorization', `Bearer ${this.currentToken}`);
-    }
-
-    return fetch(url, {
-      ...options,
-      headers
+  // Update the auth token by setting the session properly
+  async setAuth(authData: any) {
+    console.log('🔍 [DEBUG] SupabaseAuthClient.setAuth called with:', {
+      hasAuthData: !!authData,
+      hasAccessToken: !!authData?.access_token,
+      hasRefreshToken: !!authData?.refresh_token,
+      hasUser: !!authData?.user,
+      userId: authData?.user?.id
     });
-  }
-
-  // Update the auth token
-  async setAuth(accessToken: string | null) {
     
-    if (accessToken) {
-      
-      // Store the token
-      this.currentToken = accessToken;
-      
-      
-      // Verify the token works
+    if (authData && authData.access_token) {
       try {
-        const { data, error } = await this.client
-          .from('profiles')
-          .select('id')
-          .limit(1);
-          
+        // Set the session using Supabase's built-in method
+        const { data, error } = await this.client.auth.setSession({
+          access_token: authData.access_token,
+          refresh_token: authData.refresh_token || ''
+        });
+        
         if (error) {
-          console.error('[SupabaseAuthClient] Auth verification failed:', error);
+          console.error('[SupabaseAuthClient] Failed to set session:', error);
+          throw error;
         }
+        
+        console.log('🔍 [DEBUG] Session set successfully:', {
+          userId: data.user?.id,
+          userEmail: data.user?.email,
+          sessionExists: !!data.session
+        });
+        
+        // Verify the session is working
+        const { data: user, error: userError } = await this.client.auth.getUser();
+        if (userError) {
+          console.error('[SupabaseAuthClient] User verification failed:', userError);
+        } else {
+          console.log('🔍 [DEBUG] User verification successful:', {
+            userId: user.user?.id,
+            userEmail: user.user?.email
+          });
+        }
+        
       } catch (err) {
-        console.error('[SupabaseAuthClient] Error verifying auth:', err);
+        console.error('[SupabaseAuthClient] Error setting auth:', err);
+        throw err;
       }
     } else {
-      // Clear auth
-      this.currentToken = null;
+      // Clear the session
+      console.log('🔍 [DEBUG] Clearing Supabase session');
+      await this.client.auth.signOut();
     }
   }
 
@@ -74,9 +78,14 @@ class SupabaseAuthClient {
     return this.client;
   }
 
-  // Get current token
-  getCurrentToken(): string | null {
-    return this.currentToken;
+  // Get current session
+  async getCurrentSession() {
+    return await this.client.auth.getSession();
+  }
+
+  // Get current user
+  async getCurrentUser() {
+    return await this.client.auth.getUser();
   }
 }
 

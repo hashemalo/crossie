@@ -40,10 +40,12 @@ class AuthService {
     authenticated: false,
     loading: true
   };
+  private refreshInterval: NodeJS.Timeout | null = null;
 
   constructor() {
     this.initializeStorageListener();
     this.initialize();
+    this.startBackgroundRefresh();
   }
 
   // Initialize the service
@@ -63,6 +65,56 @@ class AuthService {
         authenticated: false, 
         loading: false 
       });
+    }
+  }
+
+  // Start background token refresh
+  private startBackgroundRefresh() {
+    // Clear any existing interval
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+    }
+
+    // Check and refresh tokens every 30 minutes
+    this.refreshInterval = setInterval(async () => {
+      try {
+        const result = await chrome.storage.local.get(['crossie_auth']);
+        const authData: StoredAuthData = result.crossie_auth;
+        
+        if (authData && authData.user) {
+          const timeUntilExpiry = authData.expires_at - (Date.now() / 1000);
+          
+          // If token expires in less than 10 minutes, refresh it
+          if (timeUntilExpiry < 600) { // 600 seconds = 10 minutes
+            console.log('Token expiring soon, refreshing...');
+            const refreshed = await this.refreshToken(authData.refresh_token);
+            if (refreshed) {
+              console.log('Token refreshed successfully');
+              // Update auth state with new token
+              const profile = await this.fetchProfile(refreshed.user.id, refreshed.access_token);
+              this.updateState({
+                user: refreshed.user,
+                profile,
+                authenticated: !!refreshed.user.id,
+                loading: false
+              });
+            } else {
+              console.warn('Token refresh failed, user will be logged out');
+              // Don't immediately sign out, let it happen naturally on next interaction
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Background refresh error:', error);
+      }
+    }, 30 * 60 * 1000); // 30 minutes
+  }
+
+  // Stop background refresh
+  private stopBackgroundRefresh() {
+    if (this.refreshInterval) {
+      clearInterval(this.refreshInterval);
+      this.refreshInterval = null;
     }
   }
 
@@ -109,8 +161,10 @@ class AuthService {
           });
         } else {
           // Token expired, try to refresh
+          console.log('Access token expired, attempting refresh...');
           const refreshed = await this.refreshToken(authData.refresh_token);
           if (refreshed) {
+            console.log('Token refresh successful');
             const profile = await this.fetchProfile(refreshed.user.id, refreshed.access_token);
             this.updateState({
               user: refreshed.user,
@@ -119,8 +173,24 @@ class AuthService {
               loading: false
             });
           } else {
-            // Refresh failed, clear auth
-            await this.signOut();
+            // Refresh failed - check how long the token has been expired
+            const timeSinceExpiry = (Date.now() / 1000) - authData.expires_at;
+            
+            // Only sign out if token has been expired for more than 7 days
+            // This gives grace period for temporary network issues
+            if (timeSinceExpiry > (7 * 24 * 60 * 60)) { // 7 days
+              console.log('Token expired beyond grace period, signing out');
+              await this.signOut();
+            } else {
+              // Keep user logged in but mark as unauthenticated for this session
+              console.log('Token refresh failed but within grace period, keeping user logged in');
+              this.updateState({
+                user: authData.user,
+                profile: null, // Will be fetched next time
+                authenticated: false, // Mark as unauthenticated for this session
+                loading: false
+              });
+            }
           }
         }
       } else {
@@ -239,6 +309,9 @@ class AuthService {
 
     await chrome.storage.local.set(storageData);
     
+    // Restart background refresh when new auth data is saved
+    this.startBackgroundRefresh();
+    
     // Broadcast auth state change
     this.broadcastAuthChange();
   }
@@ -259,6 +332,9 @@ class AuthService {
   // Sign out
   async signOut(): Promise<void> {
     try {
+      // Stop background refresh when signing out
+      this.stopBackgroundRefresh();
+      
       await chrome.storage.local.remove(['crossie_auth']);
       this.updateState({
         user: null,
