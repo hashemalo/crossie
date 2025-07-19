@@ -202,12 +202,51 @@ export default function Dashboard() {
   };
 
   const shareProject = async () => {
-    if (!shareProjectId || !shareEmail.trim()) return;
+    if (!shareProjectId || !shareEmail.trim() || !user) return;
     
     try {
-      // For now, just show a placeholder since no email integration is needed
+      // Find user by email
+      const { data: userData, error: userError } = await supabase
+        .from('profiles')
+        .select('id, username')
+        .eq('email', shareEmail.trim().toLowerCase())
+        .single();
+
+      if (userError || !userData) {
+        alert('User not found. Please make sure the email address is correct and the user has a Crossie account.');
+        return;
+      }
+
+      // Check if user is already a member
+      const { data: existingMember, error: memberError } = await supabase
+        .from('project_members')
+        .select('id, role')
+        .eq('project_id', shareProjectId)
+        .eq('user_id', userData.id)
+        .maybeSingle();
+
+      if (memberError && memberError.code !== 'PGRST116') {
+        throw memberError;
+      }
+
+      if (existingMember) {
+        alert(`${userData.username} is already a member of this project with role: ${existingMember.role}`);
+        return;
+      }
+
+      // Add user as project member
+      const { error: insertError } = await supabase
+        .from('project_members')
+        .insert({
+          project_id: shareProjectId,
+          user_id: userData.id,
+          role: shareRole
+        });
+
+      if (insertError) throw insertError;
+
       const projectName = projects.find(p => p.id === shareProjectId)?.name;
-      alert(`Project "${projectName}" shared with ${shareEmail} as ${shareRole}. (Email integration will be added later)`);
+      alert(`Successfully shared "${projectName}" with ${userData.username} (${shareEmail}) as ${shareRole}.`);
       setShowShareModal(false);
       setShareProjectId(null);
       setShareEmail('');
@@ -525,8 +564,8 @@ export default function Dashboard() {
                 </select>
               </div>
               <div className="text-xs text-slate-400 bg-slate-700 p-3 rounded">
-                <strong>Note:</strong> Email notifications will be added in a future update. 
-                For now, manually share the link with your collaborators.
+                <strong>Note:</strong> The user will be added to the project immediately. 
+                Email notifications will be added in a future update.
               </div>
             </div>
             <div className="flex items-center space-x-3 mt-6">

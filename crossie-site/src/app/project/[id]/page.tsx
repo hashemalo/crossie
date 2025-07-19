@@ -367,14 +367,56 @@ export default function ProjectPage() {
   };
 
   const shareProject = async () => {
-    if (!shareEmail.trim() || !project) return;
+    if (!shareEmail.trim() || !project || !user) return;
     
     try {
-      // For now, just show a placeholder since no email integration is needed
-      alert(`Project "${project.name}" shared with ${shareEmail} as ${shareRole}. (Email integration will be added later)`);
+      // Find user by email
+      const { data: userData, error: userError } = await supabase
+        .from('profiles')
+        .select('id, username')
+        .eq('email', shareEmail.trim().toLowerCase())
+        .single();
+
+      if (userError || !userData) {
+        alert('User not found. Please make sure the email address is correct and the user has a Crossie account.');
+        return;
+      }
+
+      // Check if user is already a member
+      const { data: existingMember, error: memberError } = await supabase
+        .from('project_members')
+        .select('id, role')
+        .eq('project_id', project.id)
+        .eq('user_id', userData.id)
+        .maybeSingle();
+
+      if (memberError && memberError.code !== 'PGRST116') {
+        throw memberError;
+      }
+
+      if (existingMember) {
+        alert(`${userData.username} is already a member of this project with role: ${existingMember.role}`);
+        return;
+      }
+
+      // Add user as project member
+      const { error: insertError } = await supabase
+        .from('project_members')
+        .insert({
+          project_id: project.id,
+          user_id: userData.id,
+          role: shareRole
+        });
+
+      if (insertError) throw insertError;
+
+      alert(`Successfully shared "${project.name}" with ${userData.username} (${shareEmail}) as ${shareRole}.`);
       setShowShareModal(false);
       setShareEmail('');
       setShareRole('member');
+      
+      // Refresh members list to show the new member
+      await fetchMembers();
     } catch (error) {
       console.error('Error sharing project:', error);
       alert('Failed to share project. Please try again.');
@@ -800,10 +842,10 @@ export default function ProjectPage() {
                   <option value="editor">Editor - Can manage and share</option>
                 </select>
               </div>
-              <div className="text-xs text-slate-400 bg-slate-700 p-3 rounded">
-                <strong>Note:</strong> Email notifications will be added in a future update. 
-                For now, manually share the link with your collaborators.
-              </div>
+                             <div className="text-xs text-slate-400 bg-slate-700 p-3 rounded">
+                 <strong>Note:</strong> The user will be added to the project immediately. 
+                 Email notifications will be added in a future update.
+               </div>
             </div>
             <div className="flex items-center space-x-3 mt-6">
               <button
