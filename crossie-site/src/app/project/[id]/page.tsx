@@ -379,6 +379,7 @@ export default function ProjectPage() {
 
       if (userError || !userData) {
         alert('User not found. Please make sure the email address is correct and the user has a Crossie account.');
+        console.log(userError);
         return;
       }
 
