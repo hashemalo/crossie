@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase, generateExtensionToken, sendTokenToExtension, sendSignOutToExtension } from '../../lib/supabase'
+import { supabase, generateExtensionToken, sendTokenToExtension } from '../../lib/supabase'
 import type { User, Session } from '@supabase/supabase-js'
 
 type AuthStatus = 'loading' | 'profile' | 'success' | 'error' | 'signed_out'
@@ -49,16 +49,13 @@ export default function AuthCallbackPage() {
           const displayName = currentSession.user.user_metadata?.full_name || 
                              currentSession.user.user_metadata?.name || 
                              currentSession.user.email?.split('@')[0] || ''
-
-        
           
-          setStatus('profile')
           setUsername(displayName.replace(/[^a-zA-Z0-9_]/g, ''))
           setStatus('profile')
-        } else if (profileError && profileError.code === '23505') {
-          // Username taken
-          console.error('Username taken:', profileError)
-          setError(`Username taken, select a different username`)
+        } else if (profileError) {
+          // Database error
+          console.error('Database error:', profileError)
+          setError(`Database error: ${profileError.message}`)
           setStatus('error')
         } else {
           // Profile exists - go straight to success
@@ -91,7 +88,6 @@ export default function AuthCallbackPage() {
     // Minimal auth listener just for sign out
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
-        console.log('Auth state changed to SIGNED_OUT')
         setStatus('signed_out')
         setSession(null)
         setUser(null)
@@ -144,21 +140,11 @@ export default function AuthCallbackPage() {
       setIsSigningOut(true)
       setError('')
       
-      // Sign out from Supabase first
       const { error } = await supabase.auth.signOut()
-      
-      // Send sign out notification to extension after successful sign out
-      await sendSignOutToExtension()
-      
-      // Don't throw error for sign out - user is signing out anyway
-      if (error) {
-        console.warn('Sign out warning (non-critical):', error)
-      }
+      if (error) throw error
       
     } catch (error: any) {
       console.error('Sign out error:', error)
-      // Still notify extension even if sign out failed
-      await sendSignOutToExtension()
       setError(error.message || 'Sign out failed')
     } finally {
       setIsSigningOut(false)
