@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { sendSignOutToExtension } from '../lib/supabase';
 
 const supabase = createClient(
   "https://sxargqkknhkcfvhbttrh.supabase.co",
@@ -44,8 +45,12 @@ export default function Dashboard() {
 
   // Add auth state listener
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
+        console.log('Dashboard: Auth state changed to SIGNED_OUT, notifying extension...')
+        // Notify extension of sign out
+        await sendSignOutToExtension()
+        
         setUser(null);
         setProjects([]);
         setLoading(false);
@@ -251,6 +256,9 @@ export default function Dashboard() {
 
   const handleSignOut = async () => {
     try {
+      // Send sign out notification to extension before signing out
+      await sendSignOutToExtension()
+      
       await supabase.auth.signOut();
       // The auth state listener will handle the state updates
     } catch (error) {

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { supabase, generateExtensionToken, sendTokenToExtension } from '../../lib/supabase'
+import { supabase, generateExtensionToken, sendTokenToExtension, sendSignOutToExtension } from '../../lib/supabase'
 import type { User, Session } from '@supabase/supabase-js'
 
 type AuthStatus = 'loading' | 'profile' | 'success' | 'error' | 'signed_out'
@@ -86,8 +86,12 @@ export default function AuthCallbackPage() {
     checkAuth()
 
     // Minimal auth listener just for sign out
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_OUT') {
+        console.log('Auth state changed to SIGNED_OUT, notifying extension...')
+        // Notify extension of sign out
+        await sendSignOutToExtension()
+        
         setStatus('signed_out')
         setSession(null)
         setUser(null)
@@ -139,6 +143,9 @@ export default function AuthCallbackPage() {
     try {
       setIsSigningOut(true)
       setError('')
+      
+      // Send sign out notification to extension before signing out
+      await sendSignOutToExtension()
       
       const { error } = await supabase.auth.signOut()
       if (error) throw error
