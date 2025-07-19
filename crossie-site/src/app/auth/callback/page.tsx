@@ -89,12 +89,9 @@ export default function AuthCallbackPage() {
     checkAuth()
 
     // Minimal auth listener just for sign out
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
-        console.log('Auth state changed to SIGNED_OUT, notifying extension...')
-        // Notify extension of sign out
-        await sendSignOutToExtension()
-        
+        console.log('Auth state changed to SIGNED_OUT')
         setStatus('signed_out')
         setSession(null)
         setUser(null)
@@ -147,14 +144,21 @@ export default function AuthCallbackPage() {
       setIsSigningOut(true)
       setError('')
       
-      // Send sign out notification to extension before signing out
+      // Sign out from Supabase first
+      const { error } = await supabase.auth.signOut()
+      
+      // Send sign out notification to extension after successful sign out
       await sendSignOutToExtension()
       
-      const { error } = await supabase.auth.signOut()
-      if (error) throw error
+      // Don't throw error for sign out - user is signing out anyway
+      if (error) {
+        console.warn('Sign out warning (non-critical):', error)
+      }
       
     } catch (error: any) {
       console.error('Sign out error:', error)
+      // Still notify extension even if sign out failed
+      await sendSignOutToExtension()
       setError(error.message || 'Sign out failed')
     } finally {
       setIsSigningOut(false)

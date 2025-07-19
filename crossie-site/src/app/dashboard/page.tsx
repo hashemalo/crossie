@@ -45,12 +45,9 @@ export default function Dashboard() {
 
   // Add auth state listener
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
-        console.log('Dashboard: Auth state changed to SIGNED_OUT, notifying extension...')
-        // Notify extension of sign out
-        await sendSignOutToExtension()
-        
+        console.log('Dashboard: Auth state changed to SIGNED_OUT')
         setUser(null);
         setProjects([]);
         setLoading(false);
@@ -256,13 +253,17 @@ export default function Dashboard() {
 
   const handleSignOut = async () => {
     try {
-      // Send sign out notification to extension before signing out
+      // Sign out from Supabase first
+      await supabase.auth.signOut();
+      
+      // Send sign out notification to extension after successful sign out
       await sendSignOutToExtension()
       
-      await supabase.auth.signOut();
       // The auth state listener will handle the state updates
     } catch (error) {
       console.error('Error signing out:', error);
+      // Still notify extension even if sign out failed
+      await sendSignOutToExtension()
     }
   };
 
