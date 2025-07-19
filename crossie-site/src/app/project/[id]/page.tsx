@@ -71,7 +71,7 @@ export default function ProjectPage() {
   const [showShareModal, setShowShareModal] = useState(false);
   const [newPageUrl, setNewPageUrl] = useState('');
   const [newMemberUsername, setNewMemberUsername] = useState('');
-  const [shareUsername, setShareUsername] = useState('');
+  const [shareEmail, setShareEmail] = useState('');
   const [shareRole, setShareRole] = useState<'member' | 'editor'>('member');
 
   useEffect(() => {
@@ -367,18 +367,18 @@ export default function ProjectPage() {
   };
 
   const shareProject = async () => {
-    if (!shareUsername.trim() || !project || !user) return;
+    if (!shareEmail.trim() || !project || !user) return;
     
     try {
-      // Find user by username
+      // Find user by email
       const { data: userData, error: userError } = await supabase
         .from('profiles')
-        .select('id, username, email')
-        .eq('username', shareUsername.trim())
+        .select('id, username')
+        .eq('email', shareEmail.trim().toLowerCase())
         .single();
 
       if (userError || !userData) {
-        alert('User not found. Please make sure the username is correct and the user has a Crossie account.');
+        alert('User not found. Please make sure the email address is correct and the user has a Crossie account.');
         console.log(userError);
         return;
       }
@@ -411,9 +411,9 @@ export default function ProjectPage() {
 
       if (insertError) throw insertError;
 
-      alert(`Successfully shared "${project.name}" with ${userData.username} (${userData.email || shareUsername}) as ${shareRole}.`);
+      alert(`Successfully shared "${project.name}" with ${userData.username} (${shareEmail}) as ${shareRole}.`);
       setShowShareModal(false);
-      setShareUsername('');
+      setShareEmail('');
       setShareRole('member');
       
       // Refresh members list to show the new member
@@ -810,24 +810,16 @@ export default function ProjectPage() {
               Share Project: {project.name}
             </h3>
             <div className="space-y-4">
-              <div className="bg-slate-700 p-3 rounded-lg">
-                <div className="text-sm text-slate-300 mb-2">
-                  <strong>Current sharing:</strong> Any member can share this project
-                </div>
-                <div className="text-xs text-slate-400">
-                  Google Docs style - all members have sharing permissions
-                </div>
-              </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Username
+                  Email Address
                 </label>
                 <input
-                  type="text"
-                  value={shareUsername}
-                  onChange={(e) => setShareUsername(e.target.value)}
+                  type="email"
+                  value={shareEmail}
+                  onChange={(e) => setShareEmail(e.target.value)}
                   className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="username"
+                  placeholder="person@example.com"
                 />
               </div>
               <div>
@@ -851,7 +843,7 @@ export default function ProjectPage() {
             <div className="flex items-center space-x-3 mt-6">
               <button
                 onClick={shareProject}
-                disabled={!shareUsername.trim()}
+                disabled={!shareEmail.trim()}
                 className="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-slate-600 disabled:text-slate-400 text-white py-2 px-4 rounded-lg font-medium transition-colors"
               >
                 Share Project
@@ -859,7 +851,7 @@ export default function ProjectPage() {
               <button
                 onClick={() => {
                   setShowShareModal(false);
-                  setShareUsername('');
+                  setShareEmail('');
                   setShareRole('member');
                 }}
                 className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 px-4 rounded-lg font-medium transition-colors"

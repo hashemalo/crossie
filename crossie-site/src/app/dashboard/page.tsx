@@ -43,7 +43,7 @@ export default function Dashboard() {
   });
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareProjectId, setShareProjectId] = useState<string | null>(null);
-  const [shareUsername, setShareUsername] = useState('');
+  const [shareEmail, setShareEmail] = useState('');
   const [shareRole, setShareRole] = useState<'member' | 'editor'>('member');
 
   // Add auth state listener
@@ -202,18 +202,18 @@ export default function Dashboard() {
   };
 
   const shareProject = async () => {
-    if (!shareProjectId || !shareUsername.trim() || !user) return;
+    if (!shareProjectId || !shareEmail.trim() || !user) return;
     
     try {
-      // Find user by username
+      // Find user by email
       const { data: userData, error: userError } = await supabase
         .from('profiles')
-        .select('id, username, email')
-        .eq('username', shareUsername.trim())
+        .select('id, username')
+        .eq('email', shareEmail.trim().toLowerCase())
         .single();
 
       if (userError || !userData) {
-        alert('User not found. Please make sure the username is correct and the user has a Crossie account.');
+        alert('User not found. Please make sure the email address is correct and the user has a Crossie account.');
         return;
       }
 
@@ -246,10 +246,10 @@ export default function Dashboard() {
       if (insertError) throw insertError;
 
       const projectName = projects.find(p => p.id === shareProjectId)?.name;
-      alert(`Successfully shared "${projectName}" with ${userData.username} (${userData.email || shareUsername}) as ${shareRole}.`);
+      alert(`Successfully shared "${projectName}" with ${userData.username} (${shareEmail}) as ${shareRole}.`);
       setShowShareModal(false);
       setShareProjectId(null);
-      setShareUsername('');
+      setShareEmail('');
       setShareRole('member');
     } catch (error) {
       console.error('Error sharing project:', error);
@@ -540,14 +540,14 @@ export default function Dashboard() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Username
+                  Email Address
                 </label>
                 <input
-                  type="text"
-                  value={shareUsername}
-                  onChange={(e) => setShareUsername(e.target.value)}
+                  type="email"
+                  value={shareEmail}
+                  onChange={(e) => setShareEmail(e.target.value)}
                   className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="username"
+                  placeholder="person@example.com"
                 />
               </div>
               <div>
@@ -571,7 +571,7 @@ export default function Dashboard() {
             <div className="flex items-center space-x-3 mt-6">
               <button
                 onClick={shareProject}
-                disabled={!shareUsername.trim()}
+                disabled={!shareEmail.trim()}
                 className="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-slate-600 disabled:text-slate-400 text-white py-2 px-4 rounded-lg font-medium transition-colors"
               >
                 Share Project
@@ -580,7 +580,7 @@ export default function Dashboard() {
                 onClick={() => {
                   setShowShareModal(false);
                   setShareProjectId(null);
-                  setShareUsername('');
+                  setShareEmail('');
                   setShareRole('member');
                 }}
                 className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 px-4 rounded-lg font-medium transition-colors"
