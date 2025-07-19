@@ -68,8 +68,11 @@ export default function ProjectPage() {
   const [activeTab, setActiveTab] = useState<'pages' | 'annotations' | 'members'>('pages');
   const [showAddPageModal, setShowAddPageModal] = useState(false);
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
   const [newPageUrl, setNewPageUrl] = useState('');
   const [newMemberUsername, setNewMemberUsername] = useState('');
+  const [shareEmail, setShareEmail] = useState('');
+  const [shareRole, setShareRole] = useState<'member' | 'editor'>('member');
 
   useEffect(() => {
     checkAuth();
@@ -132,10 +135,8 @@ export default function ProjectPage() {
       // Fetch annotations
       await fetchAnnotations();
       
-      // Fetch members if team project
-      if (projectData.is_team_project) {
-        await fetchMembers();
-      }
+      // Fetch members (always visible now with new sharing model)
+      await fetchMembers();
     } catch (error) {
       console.error('Error fetching project:', error);
       router.push('/dashboard');
@@ -365,6 +366,21 @@ export default function ProjectPage() {
     }
   };
 
+  const shareProject = async () => {
+    if (!shareEmail.trim() || !project) return;
+    
+    try {
+      // For now, just show a placeholder since no email integration is needed
+      alert(`Project "${project.name}" shared with ${shareEmail} as ${shareRole}. (Email integration will be added later)`);
+      setShowShareModal(false);
+      setShareEmail('');
+      setShareRole('member');
+    } catch (error) {
+      console.error('Error sharing project:', error);
+      alert('Failed to share project. Please try again.');
+    }
+  };
+
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleDateString('en-US', {
       year: 'numeric',
@@ -415,13 +431,20 @@ export default function ProjectPage() {
               </a>
               <div className="w-px h-6 bg-slate-600"></div>
               <h1 className="text-xl font-semibold text-white">{project.name}</h1>
-              {project.is_team_project && (
-                <span className="text-xs bg-blue-600 text-white px-2 py-1 rounded-full">
-                  Team
-                </span>
-              )}
+              <span className="text-xs bg-green-600 text-white px-2 py-1 rounded-full">
+                Shareable
+              </span>
             </div>
             <div className="flex items-center space-x-4">
+              <button
+                onClick={() => setShowShareModal(true)}
+                className="flex items-center space-x-1 text-sm bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.367 2.684 3 3 0 00-5.367-2.684z" />
+                </svg>
+                <span>Share</span>
+              </button>
               <span className="text-sm text-slate-400">
                 Welcome, {user?.username}
               </span>
@@ -482,18 +505,16 @@ export default function ProjectPage() {
             >
               Annotations ({annotations.length})
             </button>
-            {project.is_team_project && (
-              <button
-                onClick={() => setActiveTab('members')}
-                className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'members'
-                    ? 'border-blue-500 text-blue-400'
-                    : 'border-transparent text-slate-400 hover:text-slate-300'
-                }`}
-              >
-                Members ({members.length})
-              </button>
-            )}
+            <button
+              onClick={() => setActiveTab('members')}
+              className={`py-2 px-1 border-b-2 font-medium text-sm ${
+                activeTab === 'members'
+                  ? 'border-blue-500 text-blue-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-300'
+              }`}
+            >
+              Members ({members.length})
+            </button>
           </nav>
         </div>
 
@@ -625,15 +646,15 @@ export default function ProjectPage() {
           </div>
         )}
 
-        {activeTab === 'members' && project.is_team_project && (
+        {activeTab === 'members' && (
           <div>
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-medium text-white">Team Members</h3>
+              <h3 className="text-lg font-medium text-white">Project Members</h3>
               <button
-                onClick={() => setShowAddMemberModal(true)}
-                className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg font-medium transition-colors"
+                onClick={() => setShowShareModal(true)}
+                className="bg-green-600 hover:bg-green-500 text-white px-4 py-2 rounded-lg font-medium transition-colors"
               >
-                Add Member
+                Share Project
               </button>
             </div>
 
@@ -729,6 +750,75 @@ export default function ProjectPage() {
               </button>
               <button
                 onClick={() => setShowAddMemberModal(false)}
+                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 px-4 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Share Project Modal */}
+      {showShareModal && project && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-slate-800 rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold text-white mb-4">
+              Share Project: {project.name}
+            </h3>
+            <div className="space-y-4">
+              <div className="bg-slate-700 p-3 rounded-lg">
+                <div className="text-sm text-slate-300 mb-2">
+                  <strong>Current sharing:</strong> Any member can share this project
+                </div>
+                <div className="text-xs text-slate-400">
+                  Google Docs style - all members have sharing permissions
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Email Address
+                </label>
+                <input
+                  type="email"
+                  value={shareEmail}
+                  onChange={(e) => setShareEmail(e.target.value)}
+                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="person@example.com"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Role
+                </label>
+                <select
+                  value={shareRole}
+                  onChange={(e) => setShareRole(e.target.value as 'member' | 'editor')}
+                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="member">Member - Can view and annotate</option>
+                  <option value="editor">Editor - Can manage and share</option>
+                </select>
+              </div>
+              <div className="text-xs text-slate-400 bg-slate-700 p-3 rounded">
+                <strong>Note:</strong> Email notifications will be added in a future update. 
+                For now, manually share the link with your collaborators.
+              </div>
+            </div>
+            <div className="flex items-center space-x-3 mt-6">
+              <button
+                onClick={shareProject}
+                disabled={!shareEmail.trim()}
+                className="flex-1 bg-green-600 hover:bg-green-500 disabled:bg-slate-600 disabled:text-slate-400 text-white py-2 px-4 rounded-lg font-medium transition-colors"
+              >
+                Share Project
+              </button>
+              <button
+                onClick={() => {
+                  setShowShareModal(false);
+                  setShareEmail('');
+                  setShareRole('member');
+                }}
                 className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 px-4 rounded-lg font-medium transition-colors"
               >
                 Cancel
