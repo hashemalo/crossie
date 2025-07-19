@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { supabase, generateExtensionToken, sendTokenToExtension } from '../../lib/supabase'
+import { sanitizeUsername, validateUsername, USERNAME_PATTERN, USERNAME_REQUIREMENTS } from '../../lib/username'
 import type { User, Session } from '@supabase/supabase-js'
 
 type AuthStatus = 'loading' | 'profile' | 'success' | 'error' | 'signed_out'
@@ -9,6 +10,7 @@ type AuthStatus = 'loading' | 'profile' | 'success' | 'error' | 'signed_out'
 export default function AuthCallbackPage() {
   const [status, setStatus] = useState<AuthStatus>('loading')
   const [username, setUsername] = useState('')
+  const [usernameError, setUsernameError] = useState('')
   const [error, setError] = useState('')
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
@@ -50,7 +52,7 @@ export default function AuthCallbackPage() {
                              currentSession.user.user_metadata?.name || 
                              currentSession.user.email?.split('@')[0] || ''
           
-          setUsername(displayName.replace(/[^a-zA-Z0-9_]/g, ''))
+          setUsername(sanitizeUsername(displayName))
           setStatus('profile')
         } else if (profileError) {
           // Database error
@@ -108,11 +110,19 @@ export default function AuthCallbackPage() {
 
       console.log('Creating profile for user:', user.id)
       
+      // Validate and sanitize username
+      const sanitizedUsername = sanitizeUsername(username);
+      const validation = validateUsername(sanitizedUsername);
+      
+      if (!validation.isValid) {
+        throw new Error(validation.error);
+      }
+
       const { data, error } = await supabase
         .from('profiles')
         .insert({
           id: user.id,
-          username: username.trim(),
+          username: sanitizedUsername,
           email: user.email,
           updated_at: new Date().toISOString(),
         })
@@ -274,17 +284,36 @@ export default function AuthCallbackPage() {
               <input
                 type="text"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(e) => {
+                  const sanitized = sanitizeUsername(e.target.value);
+                  setUsername(sanitized);
+                  
+                  // Validate in real-time
+                  if (sanitized) {
+                    const validation = validateUsername(sanitized);
+                    setUsernameError(validation.isValid ? '' : validation.error || '');
+                  } else {
+                    setUsernameError('');
+                  }
+                }}
                 className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="Choose a unique username"
+                placeholder="username.example_123"
                 required
-                pattern="^[a-zA-Z0-9_]+$"
-                title="Username can only contain letters, numbers, and underscores"
+                pattern={USERNAME_PATTERN}
+                title={USERNAME_REQUIREMENTS}
               />
+              <p className="text-xs text-slate-400 mt-1">
+                {USERNAME_REQUIREMENTS}
+              </p>
+              {usernameError && (
+                <p className="text-xs text-red-400 mt-1">
+                  {usernameError}
+                </p>
+              )}
             </div>
             <button
               type="submit"
-              disabled={!username.trim()}
+              disabled={!username.trim() || !!usernameError}
               className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 text-white py-3 px-4 rounded-lg font-medium transition-colors"
             >
               Complete Setup

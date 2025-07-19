@@ -530,14 +530,6 @@ export default function Dashboard() {
               Share Project: {projects.find(p => p.id === shareProjectId)?.name}
             </h3>
             <div className="space-y-4">
-              <div className="bg-slate-700 p-3 rounded-lg">
-                <div className="text-sm text-slate-300 mb-2">
-                  <strong>Current sharing:</strong> Any member can share this project
-                </div>
-                <div className="text-xs text-slate-400">
-                  Google Docs style - all members have sharing permissions
-                </div>
-              </div>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-2">
                   Email Address
