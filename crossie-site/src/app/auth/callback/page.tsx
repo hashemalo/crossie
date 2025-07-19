@@ -49,13 +49,16 @@ export default function AuthCallbackPage() {
           const displayName = currentSession.user.user_metadata?.full_name || 
                              currentSession.user.user_metadata?.name || 
                              currentSession.user.email?.split('@')[0] || ''
+
+        
           
+          setStatus('profile')
           setUsername(displayName.replace(/[^a-zA-Z0-9_]/g, ''))
           setStatus('profile')
-        } else if (profileError) {
-          // Database error
-          console.error('Database error:', profileError)
-          setError(`Database error: ${profileError.message}`)
+        } else if (profileError && profileError.code === '23505') {
+          // Username taken
+          console.error('Username taken:', profileError)
+          setError(`Username taken, select a different username`)
           setStatus('error')
         } else {
           // Profile exists - go straight to success
