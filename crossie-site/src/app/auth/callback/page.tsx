@@ -150,6 +150,11 @@ export default function AuthCallbackPage() {
       setIsSigningOut(true)
       setError('')
       
+      // Send sign out message to extension first
+      const { sendSignOutToExtension } = await import('../../lib/supabase');
+      await sendSignOutToExtension();
+      
+      // Then sign out from Supabase
       const { error } = await supabase.auth.signOut()
       if (error) throw error
       
@@ -350,7 +355,7 @@ export default function AuthCallbackPage() {
             </p>
             <div className="flex justify-center space-x-4">
               <button
-                onClick={() => window.location.href = '/'}
+                onClick={() => window.location.href = '/dashboard'}
                 className="bg-blue-600 hover:bg-blue-500 text-white py-2 px-6 rounded-lg font-medium transition-colors"
               >
                 Go to Dashboard

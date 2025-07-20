@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
+import { sendSignOutToExtension } from '../lib/supabase';
 
 const supabase = createClient(
   "https://sxargqkknhkcfvhbttrh.supabase.co",
@@ -35,6 +36,7 @@ export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isSignedOut, setIsSignedOut] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [newProject, setNewProject] = useState({
     name: '',
@@ -53,7 +55,11 @@ export default function Dashboard() {
         setUser(null);
         setProjects([]);
         setLoading(false);
+        setIsSignedOut(true);
+        // Redirect to home page after sign out
+        window.location.href = '/';
       } else if (event === 'SIGNED_IN' && session?.user) {
+        setIsSignedOut(false);
         checkAuth();
       }
     });
@@ -316,6 +322,10 @@ export default function Dashboard() {
 
   const handleSignOut = async () => {
     try {
+      // Send sign out message to extension first
+      await sendSignOutToExtension();
+      
+      // Then sign out from Supabase
       await supabase.auth.signOut();
       // The auth state listener will handle the state updates
     } catch (error) {
@@ -327,6 +337,23 @@ export default function Dashboard() {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
         <div className="animate-spin w-12 h-12 border-4 border-blue-400 border-t-transparent rounded-full"></div>
+      </div>
+    );
+  }
+
+  if (isSignedOut) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-20 h-20 bg-slate-600 rounded-full mx-auto flex items-center justify-center mb-4">
+            <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3-3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-2">Signed Out</h2>
+          <p className="text-slate-400 mb-6">You have been signed out successfully. Redirecting...</p>
+          <div className="animate-spin w-8 h-8 border-4 border-blue-400 border-t-transparent rounded-full mx-auto"></div>
+        </div>
       </div>
     );
   }
@@ -496,10 +523,6 @@ export default function Dashboard() {
                   rows={3}
                   placeholder="Describe your project..."
                 />
-              </div>
-
-              <div className="text-xs text-slate-400 bg-slate-700 p-3 rounded">
-                <strong>Note:</strong> All projects start as individual and can be shared with others later using Google Docs style sharing.
               </div>
             </div>
 

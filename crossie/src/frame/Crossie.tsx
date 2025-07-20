@@ -299,12 +299,6 @@ export default function Crossie() {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [currentPage, setCurrentPage] = useState<Page | null>(null);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
-  const [showCreateProject, setShowCreateProject] = useState(false);
-  const [newProject, setNewProject] = useState({
-    name: "",
-    description: "",
-    isTeamProject: false,
-  });
   const [authInitialized, setAuthInitialized] = useState(false);
 
   const annotationsRef = useRef<HTMLDivElement>(null);
@@ -337,14 +331,19 @@ export default function Crossie() {
     );
   }, []);
 
-  // Update useEffect to trigger highlighting when annotations change
+  // Enhanced highlighting trigger with better timing control
   useEffect(() => {
-    if (
-      annotations.length > 0 &&
-      !annotations.some((ann) => ann.isOptimistic)
-    ) {
-      // Send highlight request to parent
-      highlightTextOnPage(annotations);
+    // Only trigger highlighting when we have real annotations (not optimistic)
+    const realAnnotations = annotations.filter(ann => !ann.isOptimistic);
+    
+    if (realAnnotations.length > 0) {
+      // Add a small delay to ensure the page is ready for highlighting
+      const timeoutId = setTimeout(() => {
+        console.log(`[Crossie] Triggering highlights for ${realAnnotations.length} annotations`);
+        highlightTextOnPage(realAnnotations);
+      }, 150); // Small delay for better reliability
+      
+      return () => clearTimeout(timeoutId);
     }
   }, [annotations]);
 
@@ -398,6 +397,10 @@ export default function Crossie() {
           setTextAnnotationRequest(selectionData);
           setIsVisible(true);
         }
+      }
+      if (event.data?.type === "CLEAR_SELECTION") {
+        // Clear the text annotation request when text is deselected
+        setTextAnnotationRequest(null);
       }
       if (event.data?.type === "PAGE_TITLE_RESPONSE") {
         const { title } = event.data.payload || {};
@@ -510,76 +513,9 @@ export default function Crossie() {
     if (!authState.authenticated && authInitialized) clearAllSavedProjects();
   }, [authState.authenticated, authInitialized]);
 
-  const createProject = async () => {
-    if (!authState.user || !newProject.name) return;
-    try {
-      const userId = authState.user.id;
 
-      // Create project
-      const { data: projectData, error: projectError } = await supabase
-        .from("projects")
-        .insert({
-          name: newProject.name,
-          description: newProject.description,
-          created_by: userId,
-          is_team_project: newProject.isTeamProject,
-        })
-        .select()
-        .single();
 
-      if (projectError) throw projectError;
 
-      // Add creator as member
-      const { error: memberError } = await supabase
-        .from("project_members")
-        .insert({
-          project_id: projectData.id,
-          user_id: userId,
-          role: "owner",
-        });
-
-      if (memberError) {
-        console.error("Error adding creator as member:", memberError);
-        // Rollback project creation if member addition fails
-        await supabase.from("projects").delete().eq("id", projectData.id);
-        throw memberError;
-      }
-
-      // Add page relationship if current page exists
-      if (currentPage) {
-        const { error: pageError } = await supabase
-          .from("project_pages")
-          .insert({
-            project_id: projectData.id,
-            page_id: currentPage.id,
-            added_by: userId,
-          });
-
-        if (pageError) {
-          console.error("Error linking page to project:", pageError);
-          // Don't fail the entire operation for page linking errors
-        }
-      }
-
-      const newProjectObj: Project = {
-        id: projectData.id,
-        name: projectData.name,
-        description: projectData.description,
-        isTeamProject: projectData.is_team_project,
-        createdBy: projectData.created_by,
-        createdAt: new Date(projectData.created_at),
-      };
-
-      setProjects([newProjectObj, ...projects]);
-      setSelectedProject(newProjectObj);
-      setShowCreateProject(false);
-      setNewProject({ name: "", description: "", isTeamProject: false });
-      saveSelectedProject(newProjectObj, url);
-    } catch (error) {
-      console.error("Error creating project:", error);
-      alert("Failed to create project. Please try again.");
-    }
-  };
 
   const selectProject = async (project: Project) => {
     setSelectedProject(project);
@@ -919,23 +855,32 @@ export default function Crossie() {
     url,
   ]);
 
-  // Function to scroll to highlighted text
+  // Enhanced function to scroll to highlighted text with better error handling
   const scrollToHighlight = useCallback((annotation: Annotation) => {
+    console.log(`[Crossie] Scroll to highlight request for annotation ${annotation.id}`);
+    
     if (annotation.selectionData) {
+      // Use full selection data for most accurate scrolling
       sendToParent({
         type: "SCROLL_TO_HIGHLIGHT",
-        payload: { selectionData: annotation.selectionData },
+        payload: { 
+          annotationId: annotation.id,
+          selectionData: annotation.selectionData 
+        },
       });
     } else if (annotation.highlightedText) {
-      // Fallback: try to scroll using just the highlighted text
+      // Fallback: create minimal selection data from highlighted text
       sendToParent({
         type: "SCROLL_TO_HIGHLIGHT",
         payload: {
+          annotationId: annotation.id,
           selectionData: {
             selectedText: annotation.highlightedText,
           },
         },
       });
+    } else {
+      console.warn(`[Crossie] Cannot scroll to annotation ${annotation.id} - no text data available`);
     }
   }, []);
 
@@ -1177,17 +1122,7 @@ export default function Crossie() {
                       ))}
                     </div>
                   )}
-                  <div className="border-t border-slate-600 mt-2 pt-2">
-                    <button
-                      onClick={() => {
-                        setShowProjectSelector(false);
-                        setShowCreateProject(true);
-                      }}
-                      className="w-full text-left px-2 py-1 rounded text-xs text-blue-400 hover:bg-slate-600 transition-colors"
-                    >
-                      + Create New Project
-                    </button>
-                  </div>
+
                 </div>
               </div>
             )}
@@ -1452,86 +1387,9 @@ export default function Crossie() {
         </div>
       </section>
 
-      {showCreateProject && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-slate-800 rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold text-white mb-4">
-              Create New Project
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Project Name
-                </label>
-                <input
-                  type="text"
-                  value={newProject.name}
-                  onChange={(e) =>
-                    setNewProject({ ...newProject, name: e.target.value })
-                  }
-                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="My Website Project"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Description (Optional)
-                </label>
-                <textarea
-                  value={newProject.description}
-                  onChange={(e) =>
-                    setNewProject({
-                      ...newProject,
-                      description: e.target.value,
-                    })
-                  }
-                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  rows={3}
-                  placeholder="Describe your project..."
-                />
-              </div>
-              <div className="flex items-center">
-                <input
-                  type="checkbox"
-                  id="team-project"
-                  checked={newProject.isTeamProject}
-                  onChange={(e) =>
-                    setNewProject({
-                      ...newProject,
-                      isTeamProject: e.target.checked,
-                    })
-                  }
-                  className="mr-2"
-                />
-                <label
-                  htmlFor="team-project"
-                  className="text-sm text-slate-300"
-                >
-                  This is a team project
-                </label>
-              </div>
-              <div className="text-xs text-slate-400 bg-slate-700 p-3 rounded">
-                <strong>Website:</strong> {url}
-              </div>
-            </div>
-            <div className="flex items-center space-x-3 mt-6">
-              <button
-                onClick={createProject}
-                disabled={!newProject.name}
-                className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 disabled:text-slate-400 text-white py-2 px-4 rounded-lg font-medium transition-colors"
-              >
-                Create Project
-              </button>
-              <button
-                onClick={() => setShowCreateProject(false)}
-                className="flex-1 bg-slate-700 hover:bg-slate-600 text-white py-2 px-4 rounded-lg font-medium transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+
+
+
     </div>
   );
 }

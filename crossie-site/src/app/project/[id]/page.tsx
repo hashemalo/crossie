@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import { useParams, useRouter } from 'next/navigation';
+import { sendSignOutToExtension } from '../../lib/supabase';
 
 const supabase = createClient(
   "https://sxargqkknhkcfvhbttrh.supabase.co",
@@ -65,6 +66,7 @@ export default function ProjectPage() {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [members, setMembers] = useState<ProjectMember[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isSignedOut, setIsSignedOut] = useState(false);
   const [activeTab, setActiveTab] = useState<'pages' | 'annotations' | 'members'>('pages');
   const [showAddPageModal, setShowAddPageModal] = useState(false);
   const [showAddMemberModal, setShowAddMemberModal] = useState(false);
@@ -77,6 +79,28 @@ export default function ProjectPage() {
   useEffect(() => {
     checkAuth();
   }, []);
+
+  // Add auth state listener
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setProject(null);
+        setPages([]);
+        setAnnotations([]);
+        setMembers([]);
+        setLoading(false);
+        setIsSignedOut(true);
+        // Redirect to home page after sign out
+        router.push('/');
+      } else if (event === 'SIGNED_IN' && session?.user) {
+        setIsSignedOut(false);
+        checkAuth();
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [router]);
 
   const checkAuth = async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -449,6 +473,23 @@ export default function ProjectPage() {
     );
   }
 
+  if (isSignedOut) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-20 h-20 bg-slate-600 rounded-full mx-auto flex items-center justify-center mb-4">
+            <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3-3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-white mb-2">Signed Out</h2>
+          <p className="text-slate-400 mb-6">You have been signed out successfully. Redirecting...</p>
+          <div className="animate-spin w-8 h-8 border-4 border-blue-400 border-t-transparent rounded-full mx-auto"></div>
+        </div>
+      </div>
+    );
+  }
+
   if (!project) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
@@ -492,7 +533,18 @@ export default function ProjectPage() {
                 Welcome, {user?.username}
               </span>
               <button
-                onClick={() => supabase.auth.signOut()}
+                onClick={async () => {
+                  try {
+                    // Send sign out message to extension first
+                    await sendSignOutToExtension();
+                    
+                    // Then sign out from Supabase
+                    await supabase.auth.signOut();
+                    // The auth state listener will handle the state updates
+                  } catch (error) {
+                    console.error('Error signing out:', error);
+                  }
+                }}
                 className="text-sm text-slate-400 hover:text-slate-300 transition-colors"
               >
                 Sign Out

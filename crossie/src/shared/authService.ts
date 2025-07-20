@@ -383,7 +383,7 @@ class AuthService {
     });
   }
 
-  // Listen for storage changes from other components
+  // Listen for storage changes and messages from other components
   private initializeStorageListener(): void {
     if (
       typeof chrome !== 'undefined' &&
@@ -398,6 +398,39 @@ class AuthService {
     } else {
       console.warn('⚠️ chrome.storage.onChanged is not available — skipping listener setup');
     }
+
+    // Listen for runtime messages (like SIGN_OUT from background script)
+    if (
+      typeof chrome !== 'undefined' &&
+      chrome.runtime &&
+      chrome.runtime.onMessage
+    ) {
+      chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+        if (message.type === 'SIGN_OUT') {
+          console.log('AuthService received SIGN_OUT message from background');
+          this.handleSignOutMessage();
+        }
+        return true; // Keep message channel open
+      });
+    }
+  }
+
+  // Handle sign out message from background script
+  private async handleSignOutMessage(): Promise<void> {
+    console.log('Handling sign out message...');
+    
+    // Stop background refresh
+    this.stopBackgroundRefresh();
+    
+    // Update state immediately
+    this.updateState({
+      user: null,
+      profile: null,
+      authenticated: false,
+      loading: false
+    });
+    
+    console.log('Auth state updated after sign out');
   }
 
   // Broadcast auth changes to other parts of extension

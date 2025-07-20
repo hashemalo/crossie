@@ -299,6 +299,51 @@ chrome.runtime.onMessageExternal.addListener(
       });
       
       sendResponse({success: true});
+    } else if (request.type === 'SIGN_OUT') {
+      console.log('Received sign out message from website');
+      
+      // Clear auth data from storage
+      chrome.storage.local.remove(['crossie_auth', 'auth_token'], () => {
+        console.log('Auth data cleared from storage');
+      });
+      
+      // Forward the sign out message to any open extension popups or tabs
+      chrome.runtime.sendMessage({
+        type: 'SIGN_OUT'
+      }).catch(() => {
+        // Popup might not be open
+      });
+      
+      // Also try to send to any open extension pages
+      chrome.tabs.query({}, function(tabs) {
+        tabs.forEach(tab => {
+          if (tab.url && tab.url.startsWith(chrome.runtime.getURL(''))) {
+            chrome.tabs.sendMessage(tab.id, {
+              type: 'SIGN_OUT'
+            }).catch(() => {
+              // Tab might not have a listener
+            });
+          }
+        });
+      });
+      
+      // Broadcast auth state change to all tabs with content scripts
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+          if (tab.id) {
+            chrome.tabs.sendMessage(tab.id, {
+              type: 'AUTH_STATE_CHANGED',
+              authenticated: false,
+              user: null,
+              profile: null
+            }).catch(() => {
+              // Ignore errors for tabs without the content script
+            });
+          }
+        });
+      });
+      
+      sendResponse({success: true});
     }
   }
 );

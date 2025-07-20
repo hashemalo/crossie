@@ -73,3 +73,54 @@ export async function sendTokenToExtension(token: string, sessionData: any) {
     return false
   }
 }
+
+// Send sign out message to extension
+export async function sendSignOutToExtension() {
+  const extensionId = "hfcbcikkdedakcklfikiblmpphmamfal"
+
+  console.log('Sending sign out message to extension...')
+
+  if (!extensionId) {
+    console.error('Extension ID not configured')
+    // During development, try using broadcast channel as fallback
+    const channel = new BroadcastChannel('crossie_auth')
+    channel.postMessage({
+      type: 'SIGN_OUT'
+    })
+    channel.close()
+    return true
+  }
+
+  try {
+    // Try Chrome extension messaging
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+      chrome.runtime.sendMessage(extensionId, {
+        type: 'SIGN_OUT'
+      })
+      console.log('Sign out message sent via Chrome extension messaging')
+      return true
+    }
+    
+    // Fallback: PostMessage (if extension opens website in iframe/popup)
+    if (window.opener) {
+      window.opener.postMessage({
+        type: 'SIGN_OUT'
+      }, '*')
+      console.log('Sign out message sent via PostMessage')
+      return true
+    }
+
+    // Another fallback: Broadcast channel
+    const channel = new BroadcastChannel('crossie_auth')
+    channel.postMessage({
+      type: 'SIGN_OUT'
+    })
+    channel.close()
+    console.log('Sign out message sent via BroadcastChannel')
+    return true
+    
+  } catch (error) {
+    console.error('Failed to send sign out message to extension:', error)
+    return false
+  }
+}
