@@ -10,6 +10,25 @@ ALTER TABLE public.pages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.project_pages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.annotations ENABLE ROW LEVEL SECURITY;
 
+-- User blacklisted sites table
+CREATE TABLE public.user_blacklisted_sites (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  domain text NOT NULL,
+  pattern text, -- Optional: for more complex matching patterns
+  created_at timestamp with time zone DEFAULT now(),
+  CONSTRAINT user_blacklisted_sites_pkey PRIMARY KEY (id),
+  CONSTRAINT fk_blacklisted_site_user FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE,
+  CONSTRAINT unique_user_domain UNIQUE (user_id, domain)
+);
+
+-- RLS policies for user_blacklisted_sites
+ALTER TABLE public.user_blacklisted_sites ENABLE ROW LEVEL SECURITY;
+
+-- Users can only see and manage their own blacklisted sites
+CREATE POLICY "Users can manage their own blacklisted sites" ON public.user_blacklisted_sites
+FOR ALL USING (SELECT auth.uid() = user_id);
+
 -- ================================
 -- PROFILES TABLE POLICIES
 -- ================================

@@ -66,26 +66,8 @@ export default function Home() {
   };
 
   const handleTryCrossie = () => {
-    // Check if extension is installed
-    if (typeof window !== 'undefined' && window.chrome?.runtime) {
-      try {
-        window.chrome?.runtime?.sendMessage('hfcbcikkdedakcklfikiblmpphmamfal', { type: 'PING' }, (response: any) => {
-          if (window.chrome?.runtime?.lastError) {
-            // Extension not installed, redirect to Chrome Web Store
-            window.open('https://chromewebstore.google.com/detail/crossie/hfcbcikkdedakcklfikiblmpphmamfal', '_blank');
-          } else {
-            // Extension is installed, try to open it
-            window.chrome?.runtime?.sendMessage('hfcbcikkdedakcklfikiblmpphmamfal', { type: 'OPEN_SIDEBAR' });
-          }
-        });
-      } catch (error) {
-        // Fallback to Chrome Web Store
-        window.open('https://chromewebstore.google.com/detail/crossie/hfcbcikkdedakcklfikiblmpphmamfal', '_blank');
-      }
-    } else {
-      // Not in Chrome, redirect to Chrome Web Store
-      window.open('https://chromewebstore.google.com/detail/crossie/hfcbcikkdedakcklfikiblmpphmamfal', '_blank');
-    }
+    // Always redirect to Chrome Web Store
+    window.open('https://chromewebstore.google.com/detail/crossie/hfcbcikkdedakcklfikiblmpphmamfal', '_blank');
   };
 
   if (loading) {

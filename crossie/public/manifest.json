@@ -32,7 +32,7 @@
   "externally_connectable": {
     "matches": ["https://trycrossie.vercel.app/*", "http://localhost:3000/*"]
   },
-  "permissions": ["storage", "activeTab", "identity", "alarms"],
+  "permissions": ["storage", "activeTab", "identity", "alarms", "tabs"],
   "action": {
     "default_popup": "auth.html",
     "default_title": "Crossie - Sign In"

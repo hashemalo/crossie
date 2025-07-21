@@ -136,6 +136,128 @@ async function fetchProfile(userId, accessToken) {
   }
 }
 
+// Blacklist management functions
+async function isUrlBlacklisted(url, userId, accessToken) {
+  try {
+    const domain = new URL(url).hostname;
+    
+    // Get Supabase config from storage
+    const configResult = await chrome.storage.local.get(['supabase_config']);
+    const config = configResult.supabase_config || {
+      url: 'https://sxargqkknhkcfvhbttrh.supabase.co',
+      anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4YXJncWtrbmhrY2Z2aGJ0dHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MzEyMDAsImV4cCI6MjA2NjMwNzIwMH0.Q70cLGf69Al2prKMDSkCTnCGTuiKGY-MFK2tQ1g2T-k'
+    };
+
+    const apiUrl = `${config.url}/rest/v1/user_blacklisted_sites?user_id=eq.${userId}&domain=eq.${domain}&select=id`;
+
+    const response = await fetch(apiUrl, {
+      headers: {
+        'apikey': config.anonKey,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      }
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return data && data.length > 0;
+    }
+    return false;
+  } catch (error) {
+    console.error('[Background] Blacklist check failed:', error);
+    return false;
+  }
+}
+
+async function addToBlacklist(domain, userId, accessToken) {
+  try {
+    // Get Supabase config from storage
+    const configResult = await chrome.storage.local.get(['supabase_config']);
+    const config = configResult.supabase_config || {
+      url: 'https://sxargqkknhkcfvhbttrh.supabase.co',
+      anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4YXJncWtrbmhrY2Z2aGJ0dHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MzEyMDAsImV4cCI6MjA2NjMwNzIwMH0.Q70cLGf69Al2prKMDSkCTnCGTuiKGY-MFK2tQ1g2T-k'
+    };
+
+    const url = `${config.url}/rest/v1/user_blacklisted_sites`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'apikey': config.anonKey,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'return=minimal'
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        domain: domain
+      })
+    });
+
+    return response.ok;
+  } catch (error) {
+    console.error('[Background] Add to blacklist failed:', error);
+    return false;
+  }
+}
+
+async function removeFromBlacklist(domain, userId, accessToken) {
+  try {
+    // Get Supabase config from storage
+    const configResult = await chrome.storage.local.get(['supabase_config']);
+    const config = configResult.supabase_config || {
+      url: 'https://sxargqkknhkcfvhbttrh.supabase.co',
+      anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4YXJncWtrbmhrY2Z2aGJ0dHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MzEyMDAsImV4cCI6MjA2NjMwNzIwMH0.Q70cLGf69Al2prKMDSkCTnCGTuiKGY-MFK2tQ1g2T-k'
+    };
+
+    const url = `${config.url}/rest/v1/user_blacklisted_sites?user_id=eq.${userId}&domain=eq.${domain}`;
+
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'apikey': config.anonKey,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    return response.ok;
+  } catch (error) {
+    console.error('[Background] Remove from blacklist failed:', error);
+    return false;
+  }
+}
+
+async function getBlacklistedSites(userId, accessToken) {
+  try {
+    // Get Supabase config from storage
+    const configResult = await chrome.storage.local.get(['supabase_config']);
+    const config = configResult.supabase_config || {
+      url: 'https://sxargqkknhkcfvhbttrh.supabase.co',
+      anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN4YXJncWtrbmhrY2Z2aGJ0dHJoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTA3MzEyMDAsImV4cCI6MjA2NjMwNzIwMH0.Q70cLGf69Al2prKMDSkCTnCGTuiKGY-MFK2tQ1g2T-k'
+    };
+
+    const url = `${config.url}/rest/v1/user_blacklisted_sites?user_id=eq.${userId}&select=id,domain,created_at&order=created_at.desc`;
+
+    const response = await fetch(url, {
+      headers: {
+        'apikey': config.anonKey,
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      }
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return data || [];
+    }
+    return [];
+  } catch (error) {
+    console.error('[Background] Get blacklisted sites failed:', error);
+    return [];
+  }
+}
+
 // Handle messages from content scripts and other parts of the extension
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const { type } = message || {};
@@ -210,6 +332,100 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           data: result.auth_data
         });
       });
+      return true; // Keep message channel open for async response
+
+    case 'CHECK_BLACKLIST':
+      // Check if URL is blacklisted
+      (async () => {
+        try {
+          const { url } = message;
+          const authState = await getAuthState();
+          
+          if (authState.authData && authState.authData.user) {
+            const isBlacklisted = await isUrlBlacklisted(
+              url,
+              authState.authData.user.id,
+              authState.authData.access_token
+            );
+            sendResponse({ isBlacklisted });
+          } else {
+            sendResponse({ isBlacklisted: false });
+          }
+        } catch (error) {
+          console.error('Blacklist check error:', error);
+          sendResponse({ isBlacklisted: false });
+        }
+      })();
+      return true; // Keep message channel open for async response
+
+    case 'ADD_TO_BLACKLIST':
+      // Add domain to blacklist
+      (async () => {
+        try {
+          const { domain } = message;
+          const authState = await getAuthState();
+          
+          if (authState.authData && authState.authData.user) {
+            const success = await addToBlacklist(
+              domain,
+              authState.authData.user.id,
+              authState.authData.access_token
+            );
+            sendResponse({ success });
+          } else {
+            sendResponse({ success: false, error: 'Not authenticated' });
+          }
+        } catch (error) {
+          console.error('Add to blacklist error:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true; // Keep message channel open for async response
+
+    case 'REMOVE_FROM_BLACKLIST':
+      // Remove domain from blacklist
+      (async () => {
+        try {
+          const { domain } = message;
+          const authState = await getAuthState();
+          
+          if (authState.authData && authState.authData.user) {
+            const success = await removeFromBlacklist(
+              domain,
+              authState.authData.user.id,
+              authState.authData.access_token
+            );
+            sendResponse({ success });
+          } else {
+            sendResponse({ success: false, error: 'Not authenticated' });
+          }
+        } catch (error) {
+          console.error('Remove from blacklist error:', error);
+          sendResponse({ success: false, error: error.message });
+        }
+      })();
+      return true; // Keep message channel open for async response
+
+    case 'GET_BLACKLISTED_SITES':
+      // Get all blacklisted sites for user
+      (async () => {
+        try {
+          const authState = await getAuthState();
+          
+          if (authState.authData && authState.authData.user) {
+            const sites = await getBlacklistedSites(
+              authState.authData.user.id,
+              authState.authData.access_token
+            );
+            sendResponse({ sites });
+          } else {
+            sendResponse({ sites: [], error: 'Not authenticated' });
+          }
+        } catch (error) {
+          console.error('Get blacklisted sites error:', error);
+          sendResponse({ sites: [], error: error.message });
+        }
+      })();
       return true; // Keep message channel open for async response
 
     default:

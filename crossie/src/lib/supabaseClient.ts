@@ -24,13 +24,7 @@ class SupabaseAuthClient {
 
   // Update the auth token by setting the session properly
   async setAuth(authData: any) {
-    console.log('🔍 [DEBUG] SupabaseAuthClient.setAuth called with:', {
-      hasAuthData: !!authData,
-      hasAccessToken: !!authData?.access_token,
-      hasRefreshToken: !!authData?.refresh_token,
-      hasUser: !!authData?.user,
-      userId: authData?.user?.id
-    });
+
     
     if (authData && authData.access_token) {
       try {
@@ -45,22 +39,12 @@ class SupabaseAuthClient {
           throw error;
         }
         
-        console.log('🔍 [DEBUG] Session set successfully:', {
-          userId: data.user?.id,
-          userEmail: data.user?.email,
-          sessionExists: !!data.session
-        });
         
         // Verify the session is working
         const { data: user, error: userError } = await this.client.auth.getUser();
         if (userError) {
           console.error('[SupabaseAuthClient] User verification failed:', userError);
-        } else {
-          console.log('🔍 [DEBUG] User verification successful:', {
-            userId: user.user?.id,
-            userEmail: user.user?.email
-          });
-        }
+        } 
         
       } catch (err) {
         console.error('[SupabaseAuthClient] Error setting auth:', err);
@@ -68,7 +52,6 @@ class SupabaseAuthClient {
       }
     } else {
       // Clear the session
-      console.log('🔍 [DEBUG] Clearing Supabase session');
       await this.client.auth.signOut();
     }
   }

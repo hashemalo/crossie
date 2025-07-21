@@ -21,18 +21,15 @@ export default function AuthCallbackPage() {
 
     const processAuthOnce = async (currentSession: Session | null) => {
       if (hasProcessed) {
-        console.log('Auth already processed, skipping...')
         return
       }
       
       if (!currentSession) {
-        console.log('No session found')
         setStatus('signed_out')
         return
       }
 
       hasProcessed = true
-      console.log('Processing auth for user:', currentSession.user.id)
       
       setSession(currentSession)
       setUser(currentSession.user)
@@ -47,7 +44,6 @@ export default function AuthCallbackPage() {
 
         if (profileError && profileError.code === 'PGRST116') {
           // No profile found
-          console.log('No profile found, showing profile creation')
           const displayName = currentSession.user.user_metadata?.full_name || 
                              currentSession.user.user_metadata?.name || 
                              currentSession.user.email?.split('@')[0] || ''
@@ -61,7 +57,6 @@ export default function AuthCallbackPage() {
           setStatus('error')
         } else {
           // Profile exists - go straight to success
-          console.log('Profile found, going to success')
           await sendAuthToExtension(currentSession, profile)
           setStatus('success')
         }
@@ -108,7 +103,6 @@ export default function AuthCallbackPage() {
     try {
       if (!user || !session) throw new Error('No user or session found')
 
-      console.log('Creating profile for user:', user.id)
       
       // Validate and sanitize username
       const sanitizedUsername = sanitizeUsername(username);
@@ -134,7 +128,6 @@ export default function AuthCallbackPage() {
         throw error
       }
 
-      console.log('Profile created successfully:', data)
       
       // Send to extension
       await sendAuthToExtension(session, data)
@@ -167,7 +160,6 @@ export default function AuthCallbackPage() {
   }
 
   const sendAuthToExtension = async (currentSession: Session, profile: any) => {
-    console.log('Attempting to send auth to extension...');
     
     try {
       const token = generateExtensionToken(currentSession.user.id)
@@ -184,14 +176,11 @@ export default function AuthCallbackPage() {
         }
       }
 
-      console.log('Auth data prepared:', { userId: currentSession.user.id, profile: profile.username });
 
       const sent = await sendTokenToExtension(token, authData)
       if (!sent) {
         console.warn('Could not send token to extension directly')
-      } else {
-        console.log('Token sent to extension successfully');
-      }
+      } 
     } catch (error) {
       console.error('Error sending auth to extension:', error)
     }

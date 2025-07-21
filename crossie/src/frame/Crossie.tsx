@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { type AuthState, type Profile } from "../shared/authService";
 import { supabase, supabaseAuthClient } from "../lib/supabaseClient";
 import { canonicalise } from "../lib/canonicalise";
+import nosignIcon from "../assets/nosign.webp";
 
 // W3C-style Text Selectors (similar to Hypothesis)
 interface TextQuoteSelector {
@@ -300,6 +301,10 @@ export default function Crossie() {
   const [currentPage, setCurrentPage] = useState<Page | null>(null);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
   const [authInitialized, setAuthInitialized] = useState(false);
+  
+  // Blacklist state
+  const [isCurrentSiteBlacklisted, setIsCurrentSiteBlacklisted] = useState(false);
+  const [blacklistLoading, setBlacklistLoading] = useState(false);
 
   const annotationsRef = useRef<HTMLDivElement>(null);
   const optimisticCounterRef = useRef(0);
@@ -855,6 +860,72 @@ export default function Crossie() {
     url,
   ]);
 
+  // Check current site blacklist status
+  const checkCurrentSiteBlacklistStatus = useCallback(async () => {
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'CHECK_BLACKLIST',
+        url: url
+      });
+      
+      if (response) {
+        setIsCurrentSiteBlacklisted(response.isBlacklisted || false);
+      }
+    } catch (error) {
+      console.error('Failed to check blacklist status:', error);
+    }
+  }, [url]);
+
+  // Toggle current site blacklist status
+  const toggleCurrentSiteBlacklist = useCallback(async () => {
+    if (!url) return;
+    
+    setBlacklistLoading(true);
+    try {
+      const domain = new URL(url).hostname;
+      
+      if (isCurrentSiteBlacklisted) {
+        // Remove from blacklist
+        const response = await chrome.runtime.sendMessage({
+          type: 'REMOVE_FROM_BLACKLIST',
+          domain: domain
+        });
+        
+        if (response && response.success) {
+          setIsCurrentSiteBlacklisted(false);
+        } else {
+          alert('Failed to remove site from blacklist');
+        }
+      } else {
+        // Add to blacklist
+        const response = await chrome.runtime.sendMessage({
+          type: 'ADD_TO_BLACKLIST',
+          domain: domain
+        });
+        
+        if (response && response.success) {
+          setIsCurrentSiteBlacklisted(true);
+          // Notify user that the site will be blacklisted
+          alert(`${domain} has been blacklisted. Crossie will not appear on this site after you refresh the page.`);
+        } else {
+          alert('Failed to add site to blacklist');
+        }
+      }
+    } catch (error) {
+      console.error('Failed to toggle blacklist status:', error);
+      alert('Failed to update blacklist');
+    } finally {
+      setBlacklistLoading(false);
+    }
+  }, [url, isCurrentSiteBlacklisted]);
+
+  // Check blacklist status when component mounts and auth is initialized
+  useEffect(() => {
+    if (authInitialized && authState.authenticated) {
+      checkCurrentSiteBlacklistStatus();
+    }
+  }, [authInitialized, authState.authenticated, checkCurrentSiteBlacklistStatus]);
+
   // Enhanced function to scroll to highlighted text with better error handling
   const scrollToHighlight = useCallback((annotation: Annotation) => {
     console.log(`[Crossie] Scroll to highlight request for annotation ${annotation.id}`);
@@ -1071,7 +1142,7 @@ export default function Crossie() {
                 />
               </svg>
               <span className="text-xs">
-                {selectedProject ? selectedProject.name : "Select Project"}
+                {selectedProject ? selectedProject.name : ""}
               </span>
               <svg
                 className="w-3 h-3"
@@ -1136,6 +1207,40 @@ export default function Crossie() {
               <span className="text-xs bg-blue-600 px-2 py-1 rounded-full">
                 {annotations.length}
               </span>
+            )}
+            
+            {/* Blacklist Toggle Button */}
+            {authState.authenticated && (
+              <div className="relative group">
+                <button
+                  onClick={toggleCurrentSiteBlacklist}
+                  disabled={blacklistLoading}
+                  className={`hover:bg-slate-700 rounded p-1 transition-colors text-xs ${
+                    isCurrentSiteBlacklisted 
+                      ? 'text-red-400 hover:text-red-300' 
+                      : 'text-slate-400 hover:text-slate-300'
+                  }`}
+                  title={
+                    blacklistLoading 
+                      ? "Updating..." 
+                      : isCurrentSiteBlacklisted 
+                      ? "Remove site from blacklist" 
+                      : "Blacklist site"
+                  }
+                >
+                  {blacklistLoading ? (
+                    <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                  ) : (
+                    <img 
+                      src={nosignIcon} 
+                      alt="No sign" 
+                      width="16" 
+                      height="16" 
+                      className="w-4 h-4"
+                    />
+                  )}
+                </button>
+              </div>
             )}
           </div>
           <button

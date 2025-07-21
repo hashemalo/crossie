@@ -12,7 +12,6 @@ export default function AuthForm() {
     setError('')
 
     try {
-      console.log('Starting Google sign in...') 
       const { data, error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {

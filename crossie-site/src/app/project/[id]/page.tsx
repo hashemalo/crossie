@@ -515,9 +515,6 @@ export default function ProjectPage() {
               </a>
               <div className="w-px h-6 bg-slate-600"></div>
               <h1 className="text-xl font-semibold text-white">{project.name}</h1>
-              <span className="text-xs bg-green-600 text-white px-2 py-1 rounded-full">
-                Shareable
-              </span>
             </div>
             <div className="flex items-center space-x-4">
               <button

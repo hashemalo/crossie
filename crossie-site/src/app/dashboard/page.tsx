@@ -447,9 +447,6 @@ export default function Dashboard() {
                       {project.description || 'No description'}
                     </p>
                   </div>
-                  <span className="text-xs bg-green-600 text-white px-2 py-1 rounded-full">
-                    Shareable
-                  </span>
                 </div>
 
                 <div className="flex items-center justify-between text-sm text-slate-400 mb-4">

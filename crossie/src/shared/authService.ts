@@ -86,10 +86,8 @@ class AuthService {
           
           // If token expires in less than 10 minutes, refresh it
           if (timeUntilExpiry < 600) { // 600 seconds = 10 minutes
-            console.log('Token expiring soon, refreshing...');
             const refreshed = await this.refreshToken(authData.refresh_token);
             if (refreshed) {
-              console.log('Token refreshed successfully');
               // Update auth state with new token
               const profile = await this.fetchProfile(refreshed.user.id, refreshed.access_token);
               this.updateState({
@@ -161,10 +159,8 @@ class AuthService {
           });
         } else {
           // Token expired, try to refresh
-          console.log('Access token expired, attempting refresh...');
           const refreshed = await this.refreshToken(authData.refresh_token);
           if (refreshed) {
-            console.log('Token refresh successful');
             const profile = await this.fetchProfile(refreshed.user.id, refreshed.access_token);
             this.updateState({
               user: refreshed.user,
@@ -179,11 +175,9 @@ class AuthService {
             // Only sign out if token has been expired for more than 7 days
             // This gives grace period for temporary network issues
             if (timeSinceExpiry > (7 * 24 * 60 * 60)) { // 7 days
-              console.log('Token expired beyond grace period, signing out');
               await this.signOut();
             } else {
               // Keep user logged in but mark as unauthenticated for this session
-              console.log('Token refresh failed but within grace period, keeping user logged in');
               this.updateState({
                 user: authData.user,
                 profile: null, // Will be fetched next time
@@ -407,7 +401,6 @@ class AuthService {
     ) {
       chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (message.type === 'SIGN_OUT') {
-          console.log('AuthService received SIGN_OUT message from background');
           this.handleSignOutMessage();
         }
         return true; // Keep message channel open
@@ -417,7 +410,6 @@ class AuthService {
 
   // Handle sign out message from background script
   private async handleSignOutMessage(): Promise<void> {
-    console.log('Handling sign out message...');
     
     // Stop background refresh
     this.stopBackgroundRefresh();
@@ -430,7 +422,6 @@ class AuthService {
       loading: false
     });
     
-    console.log('Auth state updated after sign out');
   }
 
   // Broadcast auth changes to other parts of extension

@@ -78,7 +78,6 @@ export async function sendTokenToExtension(token: string, sessionData: any) {
 export async function sendSignOutToExtension() {
   const extensionId = "hfcbcikkdedakcklfikiblmpphmamfal"
 
-  console.log('Sending sign out message to extension...')
 
   if (!extensionId) {
     console.error('Extension ID not configured')
@@ -97,7 +96,6 @@ export async function sendSignOutToExtension() {
       chrome.runtime.sendMessage(extensionId, {
         type: 'SIGN_OUT'
       })
-      console.log('Sign out message sent via Chrome extension messaging')
       return true
     }
     
@@ -106,7 +104,6 @@ export async function sendSignOutToExtension() {
       window.opener.postMessage({
         type: 'SIGN_OUT'
       }, '*')
-      console.log('Sign out message sent via PostMessage')
       return true
     }
 
@@ -116,7 +113,6 @@ export async function sendSignOutToExtension() {
       type: 'SIGN_OUT'
     })
     channel.close()
-    console.log('Sign out message sent via BroadcastChannel')
     return true
     
   } catch (error) {

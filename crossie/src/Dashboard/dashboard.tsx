@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { authService, type AuthState } from "../shared/authService";
+import nosignIcon from "../assets/nosign.webp";
 
 interface Annotation {
   id: string;
@@ -17,6 +18,12 @@ interface Annotation {
   };
 }
 
+interface BlacklistedSite {
+  id: string;
+  domain: string;
+  created_at: string;
+}
+
 export default function Dashboard() {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,6 +34,13 @@ export default function Dashboard() {
     authenticated: false,
     loading: true,
   });
+  
+  // Blacklist state
+  const [blacklistedSites, setBlacklistedSites] = useState<BlacklistedSite[]>([]);
+  const [blacklistLoading, setBlacklistLoading] = useState(false);
+  const [currentTab, setCurrentTab] = useState<{ url: string; domain: string } | null>(null);
+  const [isCurrentSiteBlacklisted, setIsCurrentSiteBlacklisted] = useState(false);
+  const [toggleLoading, setToggleLoading] = useState(false);
 
   // Subscribe to auth state
   useEffect(() => {
@@ -79,8 +93,107 @@ export default function Dashboard() {
 
     if (authState.authenticated && !authState.loading) {
       fetchAnnotations();
+      fetchBlacklistedSites();
+      checkCurrentSiteBlacklistStatus();
     }
   }, [authState.authenticated, authState.loading, authState.user?.id]);
+
+  // Fetch user's blacklisted sites
+  const fetchBlacklistedSites = async () => {
+    if (!authState.user?.id) return;
+
+    try {
+      setBlacklistLoading(true);
+      const response = await chrome.runtime.sendMessage({
+        type: 'GET_BLACKLISTED_SITES'
+      });
+
+      if (response && response.sites) {
+        setBlacklistedSites(response.sites);
+      } else if (response.error) {
+        setError(response.error);
+      }
+    } catch (error: any) {
+      setError(error.message);
+    } finally {
+      setBlacklistLoading(false);
+    }
+  };
+
+  // Get current active tab
+  const getCurrentTab = async () => {
+    try {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tabs[0] && tabs[0].url) {
+        const url = tabs[0].url;
+        const domain = new URL(url).hostname;
+        setCurrentTab({ url, domain });
+        return { url, domain };
+      }
+    } catch (error) {
+      console.error('Failed to get current tab:', error);
+    }
+    return null;
+  };
+
+  // Check if current site is blacklisted
+  const checkCurrentSiteBlacklistStatus = async () => {
+    const tab = await getCurrentTab();
+    if (!tab) return;
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'CHECK_BLACKLIST',
+        url: tab.url
+      });
+      
+      if (response) {
+        setIsCurrentSiteBlacklisted(response.isBlacklisted || false);
+      }
+    } catch (error) {
+      console.error('Failed to check blacklist status:', error);
+    }
+  };
+
+  // Toggle current site blacklist status
+  const toggleCurrentSiteBlacklist = async () => {
+    if (!currentTab) return;
+    
+    setToggleLoading(true);
+    try {
+      if (isCurrentSiteBlacklisted) {
+        // Remove from blacklist
+        const response = await chrome.runtime.sendMessage({
+          type: 'REMOVE_FROM_BLACKLIST',
+          domain: currentTab.domain
+        });
+        
+        if (response && response.success) {
+          setIsCurrentSiteBlacklisted(false);
+          fetchBlacklistedSites(); // Refresh the list
+        } else {
+          setError(response.error || "Failed to remove site from blacklist");
+        }
+      } else {
+        // Add to blacklist
+        const response = await chrome.runtime.sendMessage({
+          type: 'ADD_TO_BLACKLIST',
+          domain: currentTab.domain
+        });
+        
+        if (response && response.success) {
+          setIsCurrentSiteBlacklisted(true);
+          fetchBlacklistedSites(); // Refresh the list
+        } else {
+          setError(response.error || "Failed to add site to blacklist");
+        }
+      }
+    } catch (error: any) {
+      setError(error.message);
+    } finally {
+      setToggleLoading(false);
+    }
+  };
 
   const handleSignOut = async () => {
     try {
@@ -130,6 +243,56 @@ export default function Dashboard() {
           <p className="text-blue-500 text-center text-sm">
             You have left <span className="text-bold text-blue-500">{annotations.length}</span> annotation{annotations.length !== 1 ? "s" : ""} across the web
           </p>
+        </div>
+
+        {/* Blacklist Management Section */}
+        <div className="mt-8 pt-6 border-t border-slate-700">
+          
+          {/* Current site toggle */}
+          <div className="mb-6">
+            {currentTab ? (
+              <div className="flex items-center justify-between bg-slate-800 p-4 rounded-lg">
+                <div>
+                  <div className="text-white text-sm font-medium mb-1">
+                    Current Site: {currentTab.domain}
+                  </div>
+                  <div className="text-slate-400 text-xs">
+                    {isCurrentSiteBlacklisted ? "Blacklisted" : "Active"}
+                  </div>
+                </div>
+                <div className="relative group">
+                  <button
+                    onClick={toggleCurrentSiteBlacklist}
+                    disabled={toggleLoading}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      isCurrentSiteBlacklisted 
+                        ? 'bg-red-600 hover:bg-red-500 text-white' 
+                        : 'bg-blue-600 hover:bg-blue-500 text-white'
+                    } disabled:bg-slate-600`}
+                  >
+                    {toggleLoading ? (
+                      <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                    ) : (
+                      <img 
+                        src={nosignIcon} 
+                        alt="No sign" 
+                        width="16" 
+                        height="16" 
+                        className="w-4 h-4"
+                      />
+                    )}
+                  </button>
+                  <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-slate-700 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">
+                    {isCurrentSiteBlacklisted ? "Unblacklist site" : "Blacklist site"}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="text-center py-4">
+                <p className="text-slate-400 text-sm">Unable to detect current site</p>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Sign Out Button */}

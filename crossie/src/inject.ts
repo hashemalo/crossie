@@ -1,7 +1,32 @@
 // inject.ts - Pure content script without modules
 (() => {
-  // Create iframe element
-  const iframe = document.createElement("iframe");
+  // Check if this site is blacklisted before injecting
+  const checkBlacklistAndInject = async () => {
+    try {
+      // Check with background script if this URL is blacklisted
+      const response = await chrome.runtime.sendMessage({
+        type: 'CHECK_BLACKLIST',
+        url: window.location.href
+      });
+
+      if (response && response.isBlacklisted) {
+        console.log('[Crossie] Site is blacklisted, skipping injection');
+        return; // Don't inject on blacklisted sites
+      }
+
+      // Site is not blacklisted, proceed with injection
+      initializeCrossie();
+    } catch (error) {
+      console.error('[Crossie] Blacklist check failed, proceeding with injection:', error);
+      // If blacklist check fails, default to injecting (fail-safe)
+      initializeCrossie();
+    }
+  };
+
+  // Initialize Crossie UI (moved from immediate execution)
+  const initializeCrossie = () => {
+    // Create iframe element
+    const iframe = document.createElement("iframe");
 
   const hostUrl = encodeURIComponent(window.location.href);
   iframe.src = chrome.runtime.getURL(`frame.html?host=${hostUrl}`);
@@ -1763,14 +1788,6 @@
     }, 100);
   });
 
-  // Function to highlight text on the page (legacy support)
-  function highlightTextOnPage(text: string) {
-    highlightManager.updateHighlights([{
-      id: `legacy-page-${Date.now()}`,
-      text: text
-    }]);
-  }
-
   // Handle text selection events
   document.addEventListener("selectionchange", () => {
     // Only handle selection when sidebar is open
@@ -1802,4 +1819,8 @@
     clearStoredSelection();
   });
 
+  }; // End of initializeCrossie function
+
+  // Start the injection process by checking blacklist
+  checkBlacklistAndInject();
 })();
