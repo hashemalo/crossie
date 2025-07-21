@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Crossie",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Comment and connect on any website",
   "key" : "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3XCpZFzwAiXl+7hkFzKvE4b++wtnAMFQXSjodOsSHnEg6GnlNwB2vuHSgm7bjG39IG1gXTqda597ETwug2XzFDtZo9uz1UwHlu+VNKXBc+VkKBOTk7rVlGIBxXm0BeeS2Do7xkURBPOeddi0MEyPeuKvu8Byal0UojZe+OgZtqrlynIvwGj4WjmY8ID4VKpZWAzbkVpktbTHSz8HdNkyCKOYRg62qhwb6oUmYVFYtgJ15J7PoetNEEmvDwxt6T402hMHSF1U4rxJzNdlIhzD++l0jNnNRfJq8NZuFYnC6rfuAs78T5NCQaoYgKLrnIK4xTHVQdD2MNOWa0VRRGihUQIDAQAB",
   "content_scripts": [
