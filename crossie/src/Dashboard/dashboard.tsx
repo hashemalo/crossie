@@ -254,7 +254,7 @@ export default function Dashboard() {
               <div className="flex items-center justify-between bg-slate-800 p-4 rounded-lg">
                 <div>
                   <div className="text-white text-sm font-medium mb-1">
-                    Current Site: {currentTab.domain}
+                    {currentTab.domain}
                   </div>
                   <div className="text-slate-400 text-xs">
                     {isCurrentSiteBlacklisted ? "Blacklisted" : "Active"}

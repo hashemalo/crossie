@@ -344,7 +344,6 @@ export default function Crossie() {
     if (realAnnotations.length > 0) {
       // Add a small delay to ensure the page is ready for highlighting
       const timeoutId = setTimeout(() => {
-        console.log(`[Crossie] Triggering highlights for ${realAnnotations.length} annotations`);
         highlightTextOnPage(realAnnotations);
       }, 150); // Small delay for better reliability
       
@@ -928,7 +927,6 @@ export default function Crossie() {
 
   // Enhanced function to scroll to highlighted text with better error handling
   const scrollToHighlight = useCallback((annotation: Annotation) => {
-    console.log(`[Crossie] Scroll to highlight request for annotation ${annotation.id}`);
     
     if (annotation.selectionData) {
       // Use full selection data for most accurate scrolling

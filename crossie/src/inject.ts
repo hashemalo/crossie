@@ -10,7 +10,6 @@
       });
 
       if (response && response.isBlacklisted) {
-        console.log('[Crossie] Site is blacklisted, skipping injection');
         return; // Don't inject on blacklisted sites
       }
 
@@ -251,7 +250,6 @@
         });
 
         if (needsRefresh) {
-          console.log('[HighlightManager] DOM changes detected, refreshing highlights');
           this.refreshAllHighlights();
         }
       });
@@ -330,7 +328,6 @@
      * Update highlights for multiple annotations (batched operation)
      */
     async updateHighlights(highlights: Array<{id: string, text: string, selectionData?: any}>) {
-      console.log(`[HighlightManager] Updating ${highlights.length} highlights`);
 
       // Create a batch operation
       const batchOperation = async () => {
@@ -362,7 +359,6 @@
           }
         }
 
-        console.log(`[HighlightManager] Batch: ${toAdd.size} to add, ${toUpdate.size} to update, ${toRemove.size} to remove`);
 
         // Remove obsolete highlights
         for (const id of toRemove) {
@@ -388,7 +384,6 @@
      */
     private async addHighlight(id: string, text: string, selectionData?: any): Promise<boolean> {
       if (this.pendingOperations.has(id)) {
-        console.log(`[HighlightManager] Skipping ${id} - already pending`);
         return false;
       }
 
@@ -402,7 +397,6 @@
           const retries = this.retryAttempts.get(id) || 0;
           if (retries < this.maxRetries) {
             this.retryAttempts.set(id, retries + 1);
-            console.log(`[HighlightManager] Retrying ${id} (attempt ${retries + 1})`);
             
             // Wait before retry
             await this.delay(100 * (retries + 1));
@@ -436,7 +430,6 @@
         element.parentNode.normalize();
         
         this.currentHighlights.delete(id);
-        console.log(`[HighlightManager] Removed highlight ${id}`);
       }
     }
 
@@ -454,7 +447,6 @@
               const element = this.highlightRange(range, id);
               if (element) {
                 this.currentHighlights.set(id, element);
-                console.log(`[HighlightManager] Successfully highlighted ${id} using selectors`);
                 return true;
               }
             }
@@ -465,7 +457,6 @@
         if (selectionData?.startNodePath && selectionData?.endNodePath) {
           const success = this.highlightUsingNodePaths(id, text, selectionData);
           if (success) {
-            console.log(`[HighlightManager] Successfully highlighted ${id} using node paths`);
             return true;
           }
         }
@@ -476,7 +467,6 @@
           if (parent) {
             const success = this.highlightInElement(parent, id, text, selectionData);
             if (success) {
-              console.log(`[HighlightManager] Successfully highlighted ${id} using parent context`);
               return true;
             }
           }
@@ -485,7 +475,6 @@
         // Strategy 4: Document-wide search (last resort)
         const success = this.highlightInDocument(id, text);
         if (success) {
-          console.log(`[HighlightManager] Successfully highlighted ${id} using document search`);
           return true;
         }
 
@@ -553,7 +542,6 @@
       
       this.currentHighlights.clear();
       this.retryAttempts.clear();
-      console.log('[HighlightManager] Cleared all highlights');
     }
 
     /**
@@ -575,7 +563,6 @@
       this.clearAllHighlights();
       
       if (currentHighlightData.length > 0) {
-        console.log(`[HighlightManager] Refreshing ${currentHighlightData.length} highlights`);
         await this.updateHighlights(currentHighlightData);
       }
     }
@@ -1709,7 +1696,6 @@
         // Legacy single text highlighting (rarely used)
         const { text } = payload || {};
         if (text) {
-          console.log('[Inject] Legacy highlight request for:', text);
           highlightManager.updateHighlights([{
             id: `legacy-${Date.now()}`,
             text: text
@@ -1721,7 +1707,6 @@
         // Enhanced multiple annotations highlighting
         const { highlights } = payload || {};
         if (highlights && Array.isArray(highlights)) {
-          console.log(`[Inject] Highlighting ${highlights.length} annotations`);
           highlightManager.updateHighlights(highlights);
         }
         break;
@@ -1730,7 +1715,6 @@
         // Scroll to a specific highlight using enhanced system
         const { annotationId, selectionData } = payload || {};
         if (selectionData) {
-          console.log(`[Inject] Scroll to highlight request for annotation ${annotationId || 'unknown'}`);
           const highlightId = annotationId || `scroll-${Date.now()}`;
           highlightManager.scrollToHighlight(highlightId, selectionData);
         }

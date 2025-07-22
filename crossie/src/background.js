@@ -24,7 +24,6 @@ async function checkAndRefreshToken() {
       
       // If token expires in less than 10 minutes, try to refresh it
       if (timeUntilExpiry < 600) { // 600 seconds = 10 minutes
-        console.log('Token expiring soon, attempting background refresh...');
         
         // Get Supabase config
         const configResult = await chrome.storage.local.get(['supabase_config']);
@@ -516,11 +515,9 @@ chrome.runtime.onMessageExternal.addListener(
       
       sendResponse({success: true});
     } else if (request.type === 'SIGN_OUT') {
-      console.log('Received sign out message from website');
       
       // Clear auth data from storage
       chrome.storage.local.remove(['crossie_auth', 'auth_token'], () => {
-        console.log('Auth data cleared from storage');
       });
       
       // Forward the sign out message to any open extension popups or tabs
